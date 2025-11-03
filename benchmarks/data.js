@@ -1,60 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1761638228328,
+  "lastUpdate": 1762205388126,
   "repoUrl": "https://github.com/czlonkowski/n8n-mcp",
   "entries": {
     "n8n-mcp Benchmarks": [
-      {
-        "commit": {
-          "author": {
-            "email": "56956555+czlonkowski@users.noreply.github.com",
-            "name": "Romuald Członkowski",
-            "username": "czlonkowski"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "e2c8fd0125d91e6040353c1c87b765c4d1657c92",
-          "message": "Merge pull request #283 from czlonkowski/update/n8n-and-templates-20251007\n\nUpdate n8n to v1.114.3 and optimize template fetching (v2.17.2)",
-          "timestamp": "2025-10-07T15:07:43+02:00",
-          "tree_id": "d1b46d94ffd8ed49dc683e5b84deb2c1d7effa96",
-          "url": "https://github.com/czlonkowski/n8n-mcp/commit/e2c8fd0125d91e6040353c1c87b765c4d1657c92"
-        },
-        "date": 1759842584773,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "sample - array sorting - small",
-            "value": 0.0193,
-            "range": "0.2432",
-            "unit": "ms",
-            "extra": "51864 ops/sec"
-          },
-          {
-            "name": "sample - array sorting - large",
-            "value": 3.2722,
-            "range": "1.7661000000000002",
-            "unit": "ms",
-            "extra": "306 ops/sec"
-          },
-          {
-            "name": "sample - string concatenation",
-            "value": 0.0051,
-            "range": "0.3578",
-            "unit": "ms",
-            "extra": "196871 ops/sec"
-          },
-          {
-            "name": "sample - object creation",
-            "value": 0.0663,
-            "range": "0.38939999999999997",
-            "unit": "ms",
-            "extra": "15080 ops/sec"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -1626,6 +1574,37 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/czlonkowski/n8n-mcp/commit/3f427f952836fd35cb6d054a45d179d88b9cb37b"
         },
         "date": 1761638228013,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "sample - array sorting - small",
+            "value": 0.0136,
+            "range": "0.3096",
+            "unit": "ms",
+            "extra": "73341 ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "56956555+czlonkowski@users.noreply.github.com",
+            "name": "Romuald Członkowski",
+            "username": "czlonkowski"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "af6efe9e888b1723855544dd7b7bbf0e03ef8d59",
+          "message": "chore: update n8n to 1.118.1 and bump version to 2.22.8 (#393)\n\n- Updated n8n from 1.117.2 to 1.118.1\n- Updated n8n-core from 1.116.0 to 1.117.0\n- Updated n8n-workflow from 1.114.0 to 1.115.0\n- Updated @n8n/n8n-nodes-langchain from 1.116.2 to 1.117.0\n- Rebuilt node database with 542 nodes (439 from n8n-nodes-base, 103 from @n8n/n8n-nodes-langchain)\n- Updated README badge with new n8n version\n- Updated CHANGELOG with dependency changes\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+          "timestamp": "2025-11-03T22:27:56+01:00",
+          "tree_id": "e384071cfbed76fe227c9b79dcf8b59f75eae8a9",
+          "url": "https://github.com/czlonkowski/n8n-mcp/commit/af6efe9e888b1723855544dd7b7bbf0e03ef8d59"
+        },
+        "date": 1762205387424,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
