@@ -1,39 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767805908410,
+  "lastUpdate": 1767852290868,
   "repoUrl": "https://github.com/czlonkowski/n8n-mcp",
   "entries": {
     "n8n-mcp Benchmarks": [
-      {
-        "commit": {
-          "author": {
-            "email": "56956555+czlonkowski@users.noreply.github.com",
-            "name": "Romuald Członkowski",
-            "username": "czlonkowski"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "14f3b9c12a7ecd1ff0f87e4e2de47b9c27b39cb7",
-          "message": "Merge pull request #411 from czlonkowski/feat/disabled-tools-env-var\n\nfeat: Add DISABLED_TOOLS environment variable for tool filtering (Issue #410)",
-          "timestamp": "2025-11-09T17:47:42+01:00",
-          "tree_id": "55a6d4ddc063c3618812f78e69588d6a96ea4447",
-          "url": "https://github.com/czlonkowski/n8n-mcp/commit/14f3b9c12a7ecd1ff0f87e4e2de47b9c27b39cb7"
-        },
-        "date": 1762706960174,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "sample - array sorting - small",
-            "value": 0.0136,
-            "range": "0.3096",
-            "unit": "ms",
-            "extra": "73341 ops/sec"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -1530,6 +1499,37 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/czlonkowski/n8n-mcp/commit/ce2c94c1a5ca64f82fb5b011d7739bdfd0711c66"
         },
         "date": 1767805907935,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "sample - array sorting - small",
+            "value": 0.0136,
+            "range": "0.3096",
+            "unit": "ms",
+            "extra": "73341 ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "56956555+czlonkowski@users.noreply.github.com",
+            "name": "Romuald Członkowski",
+            "username": "czlonkowski"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "211ae72f9698bf64d49e2a3d867d0b77f7a85535",
+          "message": "feat: add community nodes support (Issues #23, #490) (#527)\n\n* feat: add community nodes support (Issues #23, #490)\n\nAdd comprehensive support for n8n community nodes, expanding the node\ndatabase from 537 core nodes to 1,084 total (537 core + 547 community).\n\nNew Features:\n- 547 community nodes indexed (301 verified + 246 npm packages)\n- `source` filter for search_nodes: all, core, community, verified\n- Community metadata: isCommunity, isVerified, authorName, npmDownloads\n- Full schema support for verified nodes (no parsing needed)\n\nData Sources:\n- Verified nodes from n8n Strapi API (api.n8n.io)\n- Popular npm packages (keyword: n8n-community-node-package)\n\nCLI Commands:\n- npm run fetch:community (full rebuild)\n- npm run fetch:community:verified (fast, verified only)\n- npm run fetch:community:update (incremental)\n\nFixes #23 - search_nodes not finding community nodes\nFixes #490 - Support obtaining installed community node types\n\nConceived by Romuald Członkowski - www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* test: fix test issues for community nodes feature\n\n- Fix TypeScript literal type errors in search-nodes-source-filter.test.ts\n- Skip timeout-sensitive retry tests in community-node-fetcher.test.ts\n- Fix malformed API response test expectations\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* data: include 547 community nodes in database\n\nUpdated nodes.db with community nodes:\n- 301 verified community nodes (from n8n Strapi API)\n- 246 popular npm community packages\n\nTotal nodes: 1,349 (802 core + 547 community)\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* fix: add community fields to node-repository-outputs test mockRows\n\nUpdate all mockRow objects in the test file to include the new community\nnode fields (is_community, is_verified, author_name, etc.) to match the\nupdated database schema.\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* fix: add community fields to node-repository-core test mockRows\n\nUpdate all mockRow objects and expected results in the core test file\nto include the new community node fields, fixing CI test failures.\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* fix: separate documentation coverage tests for core vs community nodes\n\nCommunity nodes (from npm packages) typically have lower documentation\ncoverage than core n8n nodes. Updated tests to:\n- Check core nodes against 80% threshold\n- Report community nodes coverage informatively (no hard requirement)\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* fix: increase bulk insert performance threshold for community columns\n\nAdjusted performance test thresholds to account for the 8 additional\ncommunity node columns in the database schema. Insert operations are\nslightly slower with more columns.\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* fix: make list-workflows test resilient to pagination\n\nThe \"no filters\" test was flaky in CI because:\n- CI n8n instance accumulates many workflows over time\n- Default pagination (100) may not include newly created workflows\n- Workflows sorted by criteria that push new ones beyond first page\n\nChanged test to verify API response structure rather than requiring\nspecific workflows in results. Finding specific workflows is already\ncovered by pagination tests.\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n* ci: increase test timeout from 10 to 15 minutes\n\nWith community nodes support, the database is larger (~1100 nodes vs ~550)\nwhich increases test execution time. Increased timeout to prevent\npremature job termination.\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Romuald Członkowski <romualdczlonkowski@MacBook-Pro-Romuald.local>\nCo-authored-by: Claude Opus 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-01-08T07:02:56+01:00",
+          "tree_id": "86274f568c8a168dac13c956d422d515c44ce2d6",
+          "url": "https://github.com/czlonkowski/n8n-mcp/commit/211ae72f9698bf64d49e2a3d867d0b77f7a85535"
+        },
+        "date": 1767852290104,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
