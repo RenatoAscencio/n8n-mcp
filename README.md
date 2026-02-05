@@ -62,6 +62,44 @@ docker run --rm -it \
 
 All templates use `@renatoascencio/n8n-nodes-chatwoot.chatwoot` and `.chatwootTrigger` node types with empty credential placeholders (no hardcoded secrets).
 
+### Claude Desktop Configuration
+
+Add this to your `claude_desktop_config.json`:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "n8n-mcp-chatwoot": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "MCP_MODE=stdio",
+        "-e", "N8N_API_URL=https://your-n8n.example.com",
+        "-e", "N8N_API_KEY=your-api-key",
+        "ghcr.io/renatoascencio/n8n-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving. Verify by asking Claude: *"Run the chatwoot_doctor tool"*
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Unexpected token` JSON errors | Missing `MCP_MODE=stdio` | Add `-e MCP_MODE=stdio` to Docker args |
+| `chatwoot_doctor` shows n8n API not configured | Missing env vars | Add `N8N_API_URL` and `N8N_API_KEY` to Docker args |
+| No Chatwoot credentials found | Node not installed in n8n | Install `@renatoascencio/n8n-nodes-chatwoot` via Settings > Community Nodes |
+| Connection refused to Chatwoot | Wrong baseUrl or server down | Verify Chatwoot URL is accessible from the Docker container |
+| 401 Unauthorized | Invalid API token | Regenerate token in Chatwoot Profile Settings |
+| Templates missing | Corrupted Docker image | Pull fresh: `docker pull ghcr.io/renatoascencio/n8n-mcp:latest` |
+
 ---
 
 ## ⚠️ Important Safety Warning
