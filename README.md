@@ -25,6 +25,45 @@ n8n-MCP serves as a bridge between n8n's workflow automation platform and AI mod
 - 🌐 **Community nodes** - Search verified community integrations with `source` filter (NEW!)
 
 
+## Chatwoot Integration (Fork)
+
+This fork adds a **Chatwoot integration module** with 5 workflow templates for the [`@renatoascencio/n8n-nodes-chatwoot`](https://www.npmjs.com/package/@renatoascencio/n8n-nodes-chatwoot) community node (27 resources, 130+ operations).
+
+### Docker Image
+
+```bash
+# stdio mode (default) — for Claude Desktop / MCP clients
+docker run --rm -it ghcr.io/renatoascencio/n8n-mcp:latest
+
+# HTTP mode — for remote / web deployments
+docker run --rm -e MCP_MODE=http -e AUTH_TOKEN=secret -p 3000:3000 \
+  ghcr.io/renatoascencio/n8n-mcp:latest
+```
+
+Connect to an n8n instance with Chatwoot node installed:
+
+```bash
+docker run --rm -it \
+  -e MCP_MODE=stdio \
+  -e N8N_API_URL=https://your-n8n.example.com \
+  -e N8N_API_KEY=your-api-key \
+  ghcr.io/renatoascencio/n8n-mcp:latest
+```
+
+### Workflow Templates Included
+
+| Template | Description |
+|----------|-------------|
+| List Open Conversations | Schedule-triggered monitoring of open conversations |
+| Contact Sync to Sheets | Webhook trigger → sync new contacts to external systems |
+| Send Message | Webhook-triggered outbound messaging via Chatwoot API |
+| Auto-Assign Conversations | Event-driven auto-assignment using agents and teams |
+| Public API Contact | Create and manage contacts via Chatwoot Public API |
+
+All templates use `@renatoascencio/n8n-nodes-chatwoot.chatwoot` and `.chatwootTrigger` node types with empty credential placeholders (no hardcoded secrets).
+
+---
+
 ## ⚠️ Important Safety Warning
 
 **NEVER edit your production workflows directly with AI!** Always:
