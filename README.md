@@ -25,6 +25,45 @@ n8n-MCP serves as a bridge between n8n's workflow automation platform and AI mod
 - 🌐 **Community nodes** - Search verified community integrations with `source` filter (NEW!)
 
 
+## Chatwoot Integration
+
+Adds a **Chatwoot integration module** with 5 workflow templates for the [`@renatoascencio/n8n-nodes-chatwoot`](https://www.npmjs.com/package/@renatoascencio/n8n-nodes-chatwoot) community node (27 resources, 130+ operations across Application, Platform, and Public APIs).
+
+### Workflow Templates
+
+| Template | Description |
+|----------|-------------|
+| List Open Conversations | Schedule-triggered monitoring of open conversations |
+| Contact Sync to Sheets | Webhook trigger → sync new contacts to external systems |
+| Send Message | Webhook-triggered outbound messaging via Chatwoot API |
+| Auto-Assign Conversations | Event-driven auto-assignment using agents and teams |
+| Public API Contact | Create and manage contacts via Chatwoot Public API |
+
+All templates use `@renatoascencio/n8n-nodes-chatwoot.chatwoot` and `.chatwootTrigger` node types with empty credential placeholders (no hardcoded secrets).
+
+### Diagnostic Tool: `chatwoot_doctor`
+
+A built-in MCP tool for troubleshooting the Chatwoot integration:
+
+- Reports server info (version, platform, Docker detection)
+- Tests n8n API connectivity and detects Chatwoot credentials
+- Verifies all 5 workflow templates are available
+- Optional: tests Chatwoot API directly with provided credentials
+- Always available (not gated by n8n API configuration)
+
+Ask your AI assistant: *"Run the chatwoot_doctor tool"*
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `chatwoot_doctor` shows n8n API not configured | Missing env vars | Set `N8N_API_URL` and `N8N_API_KEY` |
+| No Chatwoot credentials found | Node not installed | Install `@renatoascencio/n8n-nodes-chatwoot` via n8n Settings > Community Nodes |
+| Connection refused to Chatwoot | Wrong baseUrl or server down | Verify Chatwoot URL is accessible |
+| 401 Unauthorized | Invalid API token | Regenerate token in Chatwoot Profile Settings |
+
+---
+
 ## ⚠️ Important Safety Warning
 
 **NEVER edit your production workflows directly with AI!** Always:
