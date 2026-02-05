@@ -12,6 +12,7 @@ import path from 'path';
 import { n8nDocumentationToolsFinal } from './tools';
 import { UIAppRegistry } from './ui';
 import { n8nManagementTools } from './tools-n8n-manager';
+import { chatwootTools } from './tools-chatwoot';
 import { makeToolsN8nFriendly } from './tools-n8n-friendly';
 import { getWorkflowExampleString } from './workflow-examples';
 import { logger } from '../utils/logger';
@@ -29,6 +30,7 @@ import { TemplateService } from '../templates/template-service';
 import { WorkflowValidator } from '../services/workflow-validator';
 import { isN8nApiConfigured } from '../config/n8n-api';
 import * as n8nHandlers from './handlers-n8n-manager';
+import * as chatwootHandlers from './handlers-chatwoot';
 import { handleUpdatePartialWorkflow } from './handlers-workflow-diff';
 import { getToolDocumentation, getToolsOverview } from './tools-documentation';
 import { PROJECT_VERSION } from '../utils/version';
@@ -592,6 +594,12 @@ export class N8NDocumentationMCPServer {
 
       // Combine documentation tools with management tools if API is configured
       let tools = [...enabledDocTools];
+
+      // Always include Chatwoot tools (diagnostic, not gated by n8n API)
+      const enabledChatwootTools = chatwootTools.filter(
+        tool => !disabledTools.has(tool.name)
+      );
+      tools.push(...enabledChatwootTools);
 
       // Check if n8n API tools should be available
       // 1. Environment variables (backward compatibility)
@@ -1357,6 +1365,10 @@ export class N8NDocumentationMCPServer {
         if (!this.templateService) throw new Error('Template service not initialized');
         if (!this.repository) throw new Error('Repository not initialized');
         return n8nHandlers.handleDeployTemplate(args, this.templateService, this.repository, this.instanceContext);
+
+      // Chatwoot Integration Tools
+      case 'chatwoot_doctor':
+        return chatwootHandlers.handleChatwootDoctor(args, this.instanceContext);
 
       default:
         throw new Error(`Unknown tool: ${name}`);
