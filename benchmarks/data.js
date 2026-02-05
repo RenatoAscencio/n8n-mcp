@@ -1,39 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770256791245,
+  "lastUpdate": 1770259170402,
   "repoUrl": "https://github.com/RenatoAscencio/n8n-mcp",
   "entries": {
     "n8n-mcp Benchmarks": [
-      {
-        "commit": {
-          "author": {
-            "email": "56956555+czlonkowski@users.noreply.github.com",
-            "name": "Romuald Członkowski",
-            "username": "czlonkowski"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "05424f66af655c36deeb78e0cfceb5cbc9a9fd7f",
-          "message": "feat: Session Persistence API for Zero-Downtime Deployments (v2.24.1) (#438)\n\n* feat: Add session persistence API for zero-downtime deployments (v2.24.1)\n\nImplements export/restore functionality for MCP sessions to support container\nrestarts without losing user sessions. This enables zero-downtime deployments\nfor multi-tenant platforms and Kubernetes/Docker environments.\n\nNew Features:\n- exportSessionState() - Export active sessions to JSON\n- restoreSessionState() - Restore sessions from exported data\n- SessionState type - Serializable session structure\n- Comprehensive test suite (22 tests, 100% passing)\n\nImplementation Details:\n- Only exports sessions with valid n8nApiUrl and n8nApiKey\n- Automatically filters expired sessions (respects sessionTimeout)\n- Validates context structure using existing validation\n- Handles null/invalid sessions gracefully with warnings\n- Enforces MAX_SESSIONS limit during restore (100 sessions)\n- Dormant sessions recreate transport/server on first request\n\nFiles Modified:\n- src/http-server-single-session.ts: Core export/restore logic\n- src/mcp-engine.ts: Public API wrapper methods\n- src/types/session-state.ts: Type definitions\n- tests/: Comprehensive unit tests\n\nSecurity Note:\nSession data contains plaintext n8n API keys. Downstream applications\nMUST encrypt session data before persisting to disk.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n* feat: implement 7 critical session persistence API fixes for production readiness\n\nThis commit implements all 7 critical fixes identified in the code review\nto make the session persistence API production-ready for zero-downtime\ncontainer deployments in multi-tenant environments.\n\nFixes implemented:\n1. Made instanceId optional in SessionState interface\n2. Removed redundant validation, properly using validateInstanceContext()\n3. Fixed race condition in MAX_SESSIONS check using real-time count\n4. Added comprehensive security logging with logSecurityEvent() helper\n5. Added duplicate session ID detection during export with Set tracking\n6. Added date parsing validation with isNaN checks for Invalid Date objects\n7. Restructured null checks for proper TypeScript type narrowing\n\nChanges:\n- src/types/session-state.ts: Made instanceId optional\n- src/http-server-single-session.ts: Implemented all validation and security fixes\n- tests/unit/http-server/session-persistence.test.ts: Fixed MAX_SESSIONS test\n\nAll 13 session persistence unit tests passing.\nAll 9 MCP engine session persistence tests passing.\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
-          "timestamp": "2025-11-24T18:53:26+01:00",
-          "tree_id": "d6d24a33a7a1e3bc94294f00557b9f8bc2dd6d70",
-          "url": "https://github.com/czlonkowski/n8n-mcp/commit/05424f66af655c36deeb78e0cfceb5cbc9a9fd7f"
-        },
-        "date": 1764006913151,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "sample - array sorting - small",
-            "value": 0.0136,
-            "range": "0.3096",
-            "unit": "ms",
-            "extra": "73341 ops/sec"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -1530,6 +1499,37 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/b30918db63d4bf263030ae78f98792c7c68aeac1"
         },
         "date": 1770256790951,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "sample - array sorting - small",
+            "value": 0.0136,
+            "range": "0.3096",
+            "unit": "ms",
+            "extra": "73341 ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "committer": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "distinct": true,
+          "id": "eb2f8b459c3391f94cfa12fb9fd0989f3959f4b2",
+          "message": "docs(chatwoot): add Claude Desktop config and troubleshooting to README\n\nAdd Claude Desktop configuration section with JSON example and\nplatform-specific config paths. Add troubleshooting table covering\n6 common issues: JSON errors, missing env vars, missing credentials,\nconnection refused, auth failures, and missing templates.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-02-04T20:26:27-06:00",
+          "tree_id": "85bcb04c0ede31e28f3bf79fa3828c43b8f1c03c",
+          "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/eb2f8b459c3391f94cfa12fb9fd0989f3959f4b2"
+        },
+        "date": 1770259170097,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
