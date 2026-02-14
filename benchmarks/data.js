@@ -1,39 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771030801540,
+  "lastUpdate": 1771099171615,
   "repoUrl": "https://github.com/RenatoAscencio/n8n-mcp",
   "entries": {
     "n8n-mcp Benchmarks": [
-      {
-        "commit": {
-          "author": {
-            "email": "56956555+czlonkowski@users.noreply.github.com",
-            "name": "Romuald Członkowski",
-            "username": "czlonkowski"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "c974947c84f939475ad0a37c8ca3dfb998921550",
-          "message": "chore: update n8n to 1.121.2 (#441)\n\n* chore: update n8n to 1.121.2 and bump version to 2.26.1\n\n- Updated n8n from 1.120.3 to 1.121.2\n- Updated n8n-core from 1.119.2 to 1.120.1\n- Updated n8n-workflow from 1.117.0 to 1.118.1\n- Updated @n8n/n8n-nodes-langchain from 1.119.1 to 1.120.1\n- Rebuilt node database with 545 nodes (439 from n8n-nodes-base, 106 from @n8n/n8n-nodes-langchain)\n- Updated README badge with new n8n version\n- Updated CHANGELOG with dependency changes\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n\n* chore: expand template database to 2,768 templates\n\n- Added 170 new workflow templates from n8n.io\n- Sanitized 27 templates containing API tokens\n- Updated CHANGELOG with template expansion info\n\nConceived by Romuald Członkowski - https://www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
-          "timestamp": "2025-11-25T19:21:26+01:00",
-          "tree_id": "b78a49195d5f03e525c29f33b86a92a70a63bf9a",
-          "url": "https://github.com/czlonkowski/n8n-mcp/commit/c974947c84f939475ad0a37c8ca3dfb998921550"
-        },
-        "date": 1764095014574,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "sample - array sorting - small",
-            "value": 0.0136,
-            "range": "0.3096",
-            "unit": "ms",
-            "extra": "73341 ops/sec"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -1530,6 +1499,37 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/db09e781bb20960bf11eb7098a763ad40cdde0c6"
         },
         "date": 1771030801057,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "sample - array sorting - small",
+            "value": 0.0136,
+            "range": "0.3096",
+            "unit": "ms",
+            "extra": "73341 ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "committer": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "distinct": true,
+          "id": "b5fb4ae1325b8b9638f05b13f8cff6421a78f93f",
+          "message": "feat: TVPlus MCP operator kit (compose, rules, smoke tests)\n\n- docker-compose.tvplus.yml: HTTP mode for Docker Desktop\n- .env.tvplus.example: placeholder env file (no secrets)\n- MCP_SMOKE.md: evidence of Chatwoot node detection (27 resources, 130+ ops)\n- WORKFLOW_BUILDER_RULES.md: MCP-first workflow construction rules\n- workflows/smoke-test-chatwoot-list.json: minimal Chatwoot smoke workflow\n- N8N_WORKFLOW_SMOKE.md: creation/validation evidence (ID: xOKKnZUqk4Gsh93z)\n- .gitignore: added .env.tvplus\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-02-14T13:57:07-06:00",
+          "tree_id": "4f80db84bfb8bcb69ac4bd7822448635c3c38cbb",
+          "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/b5fb4ae1325b8b9638f05b13f8cff6421a78f93f"
+        },
+        "date": 1771099171218,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
