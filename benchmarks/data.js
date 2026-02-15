@@ -1,39 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771139464612,
+  "lastUpdate": 1771198534416,
   "repoUrl": "https://github.com/RenatoAscencio/n8n-mcp",
   "entries": {
     "n8n-mcp Benchmarks": [
-      {
-        "commit": {
-          "author": {
-            "email": "56956555+czlonkowski@users.noreply.github.com",
-            "name": "Romuald Członkowski",
-            "username": "czlonkowski"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "bac4936c6d4b1c5675a893f18ba3ffcd2e58dc08",
-          "message": "fix: add n8n 1.121 availableInMCP and callerPolicy settings support (v2.26.4) (#445)\n\n* fix: add n8n 1.121 availableInMCP and callerPolicy settings support (v2.26.4)\n\nn8n 1.121 introduced a new workflow setting `availableInMCP` (boolean)\nthat controls whether a workflow is \"Available in MCP\". The sanitization\nwhitelist was missing this field, causing it to be silently stripped\nduring workflow updates.\n\nChanges:\n- Added `availableInMCP` to Zod schema in workflowSettingsSchema\n- Added `availableInMCP` and `callerPolicy` to safeSettingsProperties whitelist\n- Both settings are now preserved during workflow updates\n- Settings can be toggled via updateSettings operation\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nConceived by Romuald Członkowski - www.aiadvisors.pl/en\n\n* test: update tests for callerPolicy and availableInMCP whitelist changes\n\nUpdated 5 tests in n8n-validation.test.ts that expected callerPolicy\nto be filtered out. Since callerPolicy and availableInMCP are now\nwhitelisted (n8n 1.121+), the tests now verify these settings are\npreserved during workflow updates.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude <noreply@anthropic.com>",
-          "timestamp": "2025-11-26T20:17:34+01:00",
-          "tree_id": "212b8cc8337c320b7564f184f2f686f1fd60557a",
-          "url": "https://github.com/czlonkowski/n8n-mcp/commit/bac4936c6d4b1c5675a893f18ba3ffcd2e58dc08"
-        },
-        "date": 1764184761981,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "sample - array sorting - small",
-            "value": 0.0136,
-            "range": "0.3096",
-            "unit": "ms",
-            "extra": "73341 ops/sec"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -1530,6 +1499,37 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/77f686e45d67aecb58bcc6c800d1f75add64e273"
         },
         "date": 1771139464304,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "sample - array sorting - small",
+            "value": 0.0136,
+            "range": "0.3096",
+            "unit": "ms",
+            "extra": "73341 ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "committer": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "distinct": true,
+          "id": "69394f828666358cd24ea06fa481357aed8955f2",
+          "message": "fix(catalog): register @renatoascencio/n8n-nodes-chatwoot in nodes.db\n\nAdd both Chatwoot and Chatwoot Trigger nodes from the custom fork to the\nSQLite catalog so they appear in search_nodes and pass validate_workflow.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-02-15T17:33:04-06:00",
+          "tree_id": "d6d68ae5d62f87d45cff3bf1864bf2541dfefaa4",
+          "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/69394f828666358cd24ea06fa481357aed8955f2"
+        },
+        "date": 1771198533693,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
