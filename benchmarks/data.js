@@ -1,39 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771138715601,
+  "lastUpdate": 1771139464612,
   "repoUrl": "https://github.com/RenatoAscencio/n8n-mcp",
   "entries": {
     "n8n-mcp Benchmarks": [
-      {
-        "commit": {
-          "author": {
-            "email": "56956555+czlonkowski@users.noreply.github.com",
-            "name": "Romuald Członkowski",
-            "username": "czlonkowski"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "25784142fe12ebaebde961f3488577311755cd05",
-          "message": "fix: address tools documentation gaps and outdated references (v2.26.3) (#443)",
-          "timestamp": "2025-11-26T00:57:15+01:00",
-          "tree_id": "adccab663f47aabed599b8585de91aa7a6e955eb",
-          "url": "https://github.com/czlonkowski/n8n-mcp/commit/25784142fe12ebaebde961f3488577311755cd05"
-        },
-        "date": 1764115140293,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "sample - array sorting - small",
-            "value": 0.0136,
-            "range": "0.3096",
-            "unit": "ms",
-            "extra": "73341 ops/sec"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -1530,6 +1499,37 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/35294e12a66efa68615f23201cf23b5f6020f8ea"
         },
         "date": 1771138714911,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "sample - array sorting - small",
+            "value": 0.0136,
+            "range": "0.3096",
+            "unit": "ms",
+            "extra": "73341 ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "committer": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "distinct": true,
+          "id": "77f686e45d67aecb58bcc6c800d1f75add64e273",
+          "message": "feat: add Docker MCP Toolkit metadata labels + clean up CLAUDE.md\n\nAdd io.docker.server.metadata label for Docker Desktop self-describing\nimage support. Clean up CLAUDE.md version annotations and add Chatwoot\nintegration section.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-02-15T01:06:49-06:00",
+          "tree_id": "8a397db391f7c7bc554faa455c1cd1befd2a68e1",
+          "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/77f686e45d67aecb58bcc6c800d1f75add64e273"
+        },
+        "date": 1771139464304,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
