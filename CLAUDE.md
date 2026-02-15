@@ -19,56 +19,50 @@ src/
 ├── database/
 │   ├── schema.sql             # SQLite schema
 │   ├── node-repository.ts     # Data access layer
-│   └── database-adapter.ts    # Universal database adapter (NEW in v2.3)
+│   └── database-adapter.ts    # Universal database adapter
 ├── services/
-│   ├── property-filter.ts     # Filters properties to essentials (NEW in v2.4)
-│   ├── example-generator.ts   # Generates working examples (NEW in v2.4)
-│   ├── task-templates.ts      # Pre-configured node settings (NEW in v2.4)
-│   ├── config-validator.ts    # Configuration validation (NEW in v2.4)
-│   ├── enhanced-config-validator.ts # Operation-aware validation (NEW in v2.4.2)
-│   ├── node-specific-validators.ts  # Node-specific validation logic (NEW in v2.4.2)
-│   ├── property-dependencies.ts # Dependency analysis (NEW in v2.4)
-│   ├── type-structure-service.ts # Type structure validation (NEW in v2.22.21)
-│   ├── expression-validator.ts # n8n expression syntax validation (NEW in v2.5.0)
-│   └── workflow-validator.ts  # Complete workflow validation (NEW in v2.5.0)
+│   ├── property-filter.ts     # Filters properties to essentials
+│   ├── example-generator.ts   # Generates working examples
+│   ├── task-templates.ts      # Pre-configured node settings
+│   ├── config-validator.ts    # Configuration validation
+│   ├── enhanced-config-validator.ts # Operation-aware validation
+│   ├── node-specific-validators.ts  # Node-specific validation logic
+│   ├── property-dependencies.ts # Dependency analysis
+│   ├── type-structure-service.ts # Type structure validation
+│   ├── expression-validator.ts # n8n expression syntax validation
+│   └── workflow-validator.ts  # Complete workflow validation
 ├── types/
-│   ├── type-structures.ts      # Type structure definitions (NEW in v2.22.21)
+│   ├── type-structures.ts      # Type structure definitions
 │   ├── instance-context.ts     # Multi-tenant instance configuration
-│   └── session-state.ts        # Session persistence types (NEW in v2.24.1)
+│   └── session-state.ts        # Session persistence types
 ├── constants/
-│   └── type-structures.ts      # 22 complete type structures (NEW in v2.22.21)
+│   └── type-structures.ts      # 22 complete type structures
 ├── templates/
-│   ├── template-fetcher.ts    # Fetches templates from n8n.io API (NEW in v2.4.1)
-│   ├── template-repository.ts # Template database operations (NEW in v2.4.1)
-│   └── template-service.ts    # Template business logic (NEW in v2.4.1)
+│   ├── template-fetcher.ts    # Fetches templates from n8n.io API
+│   ├── template-repository.ts # Template database operations
+│   └── template-service.ts    # Template business logic
+├── integrations/
+│   └── chatwoot/              # Chatwoot integration (fork-specific)
+│       ├── chatwoot-integration.ts  # Main integration class with templates and validation
+│       ├── connection-validator.ts   # Multi-API connection testing with error classification
+│       ├── workflow-templates.ts     # 5 pre-built Chatwoot workflow templates
+│       └── index.ts                 # Barrel exports
 ├── scripts/
 │   ├── rebuild.ts             # Database rebuild with validation
 │   ├── validate.ts            # Node validation
-│   ├── test-nodes.ts          # Critical node tests
-│   ├── test-essentials.ts     # Test new essentials tools (NEW in v2.4)
-│   ├── test-enhanced-validation.ts # Test enhanced validation (NEW in v2.4.2)
-│   ├── test-structure-validation.ts # Test type structure validation (NEW in v2.22.21)
-│   ├── test-workflow-validation.ts # Test workflow validation (NEW in v2.5.0)
-│   ├── test-ai-workflow-validation.ts # Test AI workflow validation (NEW in v2.5.1)
-│   ├── test-mcp-tools.ts      # Test MCP tool enhancements (NEW in v2.5.1)
-│   ├── test-n8n-validate-workflow.ts # Test n8n_validate_workflow tool (NEW in v2.6.3)
-│   ├── test-typeversion-validation.ts # Test typeVersion validation (NEW in v2.6.1)
-│   ├── test-workflow-diff.ts  # Test workflow diff engine (NEW in v2.7.0)
-│   ├── test-tools-documentation.ts # Test tools documentation (NEW in v2.7.3)
-│   ├── fetch-templates.ts     # Fetch workflow templates from n8n.io (NEW in v2.4.1)
-│   └── test-templates.ts      # Test template functionality (NEW in v2.4.1)
+│   └── ...                    # Various test and utility scripts
 ├── mcp/
 │   ├── server.ts              # MCP server with enhanced tools
 │   ├── tools.ts               # Tool definitions including new essentials
-│   ├── tools-documentation.ts # Tool documentation system (NEW in v2.7.3)
+│   ├── tools-chatwoot.ts      # Chatwoot MCP tool definitions (fork-specific)
+│   ├── handlers-chatwoot.ts   # Chatwoot tool handlers (fork-specific)
+│   ├── tools-documentation.ts # Tool documentation system
 │   └── index.ts               # Main entry point with mode selection
 ├── utils/
-│   ├── console-manager.ts     # Console output isolation (NEW in v2.3.1)
+│   ├── console-manager.ts     # Console output isolation
 │   └── logger.ts              # Logging utility with HTTP awareness
-├── http-server-single-session.ts  # Single-session HTTP server (NEW in v2.3.1)
-│                                   # Session persistence API (NEW in v2.24.1)
-├── mcp-engine.ts              # Clean API for service integration (NEW in v2.3.1)
-│                                # Session persistence wrappers (NEW in v2.24.1)
+├── http-server-single-session.ts  # Single-session HTTP server + session persistence
+├── mcp-engine.ts              # Clean API for service integration + session wrappers
 └── index.ts                   # Library exports
 ```
 
@@ -162,6 +156,26 @@ The MCP server exposes tools in several categories:
 3. **Validation Tools**: Validating configurations before deployment
 4. **Workflow Tools**: Complete workflow validation
 5. **Management Tools**: Creating and updating workflows (requires API config)
+6. **Chatwoot Tools** (fork-specific): `chatwoot_doctor` diagnostic tool
+
+### Chatwoot Integration (Fork-Specific)
+
+This fork adds Chatwoot support to the upstream n8n-mcp server. The integration follows the canonical MCP patterns:
+
+**Architecture flow:** `src/integrations/chatwoot/` → `src/mcp/tools-chatwoot.ts` → `src/mcp/handlers-chatwoot.ts` → `server.ts` registration
+
+**Key components:**
+- **`chatwoot-integration.ts`**: Main class with template generation and validation logic
+- **`connection-validator.ts`**: Multi-API connection testing with AbortController timeout (10s), error classification (network/dns/timeout/ssl/invalid_url), HTTP status mapping, and secret sanitization
+- **`workflow-templates.ts`**: 5 pre-built workflow templates (monitoring, sync, messaging, automation, public API)
+- **`tools-chatwoot.ts`**: Single MCP tool definition (`chatwoot_doctor`) with annotations
+- **`handlers-chatwoot.ts`**: Handler implementation (~196 lines) — checks server version, Docker, n8n API, Chatwoot credentials, templates, and optional Chatwoot API connectivity
+
+**Tests:** `tests/chatwoot-connection-validator.test.ts` + `tests/handlers-chatwoot.test.ts` (19 tests, 88%+ coverage)
+
+### Sister Project: n8n-nodes-chatwoot
+
+The Chatwoot n8n community node package is developed at `/Users/renatoascencio/Documents/Proyectos/Cursor/n8n-nodes-chatwoot`. It provides the actual n8n node (27 resources, 130+ operations, 3 credential types) that workflows created by this MCP integration use.
 
 ## Memories and Notes for Development
 
