@@ -63,6 +63,33 @@ LABEL org.opencontainers.image.description="n8n MCP Server with Chatwoot integra
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="n8n-mcp"
 
+# Docker MCP Toolkit metadata - makes image self-describing for Docker Desktop
+LABEL io.docker.server.metadata='{\
+  "name": "n8n-mcp",\
+  "description": "n8n workflow automation MCP server with Chatwoot integration. Search nodes, validate workflows, create and manage n8n workflows via AI.",\
+  "config": {\
+    "type": "object",\
+    "properties": {\
+      "n8n_api_url": {\
+        "type": "string",\
+        "description": "URL of your n8n instance (e.g. https://n8n.example.com)"\
+      },\
+      "n8n_api_key": {\
+        "type": "string",\
+        "description": "n8n API key for workflow management"\
+      }\
+    },\
+    "required": ["n8n_api_url", "n8n_api_key"]\
+  },\
+  "env": {\
+    "MCP_MODE": "stdio",\
+    "LOG_LEVEL": "error",\
+    "DISABLE_CONSOLE_OUTPUT": "true",\
+    "N8N_API_URL": "{{config.n8n_api_url}}",\
+    "N8N_API_KEY": "{{config.n8n_api_key}}"\
+  }\
+}'
+
 # Create non-root user with unpredictable UID/GID
 # Using a hash of the build time to generate unpredictable IDs
 RUN BUILD_HASH=$(date +%s | sha256sum | head -c 8) && \

@@ -45,6 +45,7 @@ const path_1 = __importDefault(require("path"));
 const tools_1 = require("./tools");
 const ui_1 = require("./ui");
 const tools_n8n_manager_1 = require("./tools-n8n-manager");
+const tools_chatwoot_1 = require("./tools-chatwoot");
 const tools_n8n_friendly_1 = require("./tools-n8n-friendly");
 const workflow_examples_1 = require("./workflow-examples");
 const logger_1 = require("../utils/logger");
@@ -62,6 +63,7 @@ const template_service_1 = require("../templates/template-service");
 const workflow_validator_1 = require("../services/workflow-validator");
 const n8n_api_1 = require("../config/n8n-api");
 const n8nHandlers = __importStar(require("./handlers-n8n-manager"));
+const chatwootHandlers = __importStar(require("./handlers-chatwoot"));
 const handlers_workflow_diff_1 = require("./handlers-workflow-diff");
 const tools_documentation_1 = require("./tools-documentation");
 const version_1 = require("../utils/version");
@@ -385,6 +387,8 @@ class N8NDocumentationMCPServer {
             const disabledTools = this.getDisabledTools();
             const enabledDocTools = tools_1.n8nDocumentationToolsFinal.filter(tool => !disabledTools.has(tool.name));
             let tools = [...enabledDocTools];
+            const enabledChatwootTools = tools_chatwoot_1.chatwootTools.filter(tool => !disabledTools.has(tool.name));
+            tools.push(...enabledChatwootTools);
             const hasEnvConfig = (0, n8n_api_1.isN8nApiConfigured)();
             const hasInstanceConfig = !!(this.instanceContext?.n8nApiUrl && this.instanceContext?.n8nApiKey);
             const isMultiTenantEnabled = process.env.ENABLE_MULTI_TENANT === 'true';
@@ -1001,6 +1005,8 @@ class N8NDocumentationMCPServer {
                 if (!this.repository)
                     throw new Error('Repository not initialized');
                 return n8nHandlers.handleDeployTemplate(args, this.templateService, this.repository, this.instanceContext);
+            case 'chatwoot_doctor':
+                return chatwootHandlers.handleChatwootDoctor(args, this.instanceContext);
             default:
                 throw new Error(`Unknown tool: ${name}`);
         }
