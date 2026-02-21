@@ -262,6 +262,18 @@ class WorkflowValidator {
                     }
                 }
                 if (!nodeInfo) {
+                    const typeDetails = node_type_normalizer_1.NodeTypeNormalizer.normalizeWithDetails(node.type);
+                    if (typeDetails.package === 'community') {
+                        result.warnings.push({
+                            type: 'warning',
+                            nodeId: node.id,
+                            nodeName: node.name,
+                            message: `Community node "${node.type}" is not in the MCP catalog. ` +
+                                `Validation of its parameters is skipped. Install the node in n8n and ensure it works at runtime.`,
+                            code: 'COMMUNITY_NODE_NOT_IN_CATALOG'
+                        });
+                        continue;
+                    }
                     const suggestions = await this.similarityService.findSimilarNodes(node.type, 3);
                     let message = `Unknown node type: "${node.type}".`;
                     if (suggestions.length > 0) {
