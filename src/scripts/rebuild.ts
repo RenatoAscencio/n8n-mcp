@@ -124,7 +124,16 @@ async function rebuild() {
   }
   
   console.log(`💾 Save completed: ${saved} nodes saved successfully`);
-  
+
+  // Register Chatwoot community nodes
+  try {
+    const { registerChatwootNodes } = await import('../integrations/chatwoot/chatwoot-node-catalog');
+    const chatwootCount = registerChatwootNodes(repository);
+    console.log(`\n🟣 Registered ${chatwootCount} Chatwoot community nodes`);
+  } catch (error) {
+    console.warn('⚠️  Could not register Chatwoot nodes:', (error as Error).message);
+  }
+
   // Validation check
   console.log('\n🔍 Running validation checks...');
   try {
