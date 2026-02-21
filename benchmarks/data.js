@@ -1,39 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771198534416,
+  "lastUpdate": 1771716343032,
   "repoUrl": "https://github.com/RenatoAscencio/n8n-mcp",
   "entries": {
     "n8n-mcp Benchmarks": [
-      {
-        "commit": {
-          "author": {
-            "email": "56956555+czlonkowski@users.noreply.github.com",
-            "name": "Romuald Członkowski",
-            "username": "czlonkowski"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "c7e7bda5051b1e3a28ecca2a174a4a82870edc2c",
-          "message": "fix: remove historical migration info from tools documentation (v2.26.5) (#448)\n\n- Remove \"Replaces X, Y, Z...\" sentences from full.description in:\n  - get_node, validate_node, search_templates, n8n_executions, n8n_get_workflow\n- Remove version/issue references from n8n_update_partial_workflow\n- Clean up consolidation comments in index.ts\n- Documentation now starts directly with functional content\n- Estimated token savings: ~128 tokens per full documentation request\n\nConceived by Romuald Członkowski - www.aiadvisors.pl/en\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-authored-by: Claude <noreply@anthropic.com>",
-          "timestamp": "2025-11-27T13:50:45+01:00",
-          "tree_id": "58364b70cce2ede7f3441e7f68a55122477feb12",
-          "url": "https://github.com/czlonkowski/n8n-mcp/commit/c7e7bda5051b1e3a28ecca2a174a4a82870edc2c"
-        },
-        "date": 1764247962585,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "sample - array sorting - small",
-            "value": 0.0136,
-            "range": "0.3096",
-            "unit": "ms",
-            "extra": "73341 ops/sec"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -1530,6 +1499,37 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/69394f828666358cd24ea06fa481357aed8955f2"
         },
         "date": 1771198533693,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "sample - array sorting - small",
+            "value": 0.0136,
+            "range": "0.3096",
+            "unit": "ms",
+            "extra": "73341 ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "committer": {
+            "email": "renato_ascencio@hotmail.com",
+            "name": "Renato Ascencio",
+            "username": "RenatoAscencio"
+          },
+          "distinct": true,
+          "id": "747e2fda957b84e32841804bdc423b119be40b47",
+          "message": "Merge branch 'main' of https://github.com/RenatoAscencio/n8n-mcp\n\n# Conflicts:\n#\tdata/nodes.db",
+          "timestamp": "2026-02-21T17:22:17-06:00",
+          "tree_id": "53e0ba4216990c2119c40ccecb062391171bc1b9",
+          "url": "https://github.com/RenatoAscencio/n8n-mcp/commit/747e2fda957b84e32841804bdc423b119be40b47"
+        },
+        "date": 1771716342732,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
