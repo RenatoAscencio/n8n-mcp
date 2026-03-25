@@ -37,7 +37,7 @@ jobs:
           cache: 'npm'
       
       - name: Install dependencies
-        run: npm ci
+        run: npm install
       
       # Run benchmarks on current branch
       - name: Run current benchmarks
@@ -53,7 +53,7 @@ jobs:
           git status
       
       - name: Install base dependencies
-        run: npm ci
+        run: npm install
       
       - name: Run baseline benchmarks
         run: npm run benchmark:ci

@@ -43,7 +43,7 @@ jobs:
 
       - name: Build package
         run: |
-          npm ci
+          npm install
           npm run build
 
       - name: Pack package for testing
