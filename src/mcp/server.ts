@@ -366,17 +366,34 @@ export class N8NDocumentationMCPServer {
     const schemaPath = path.join(__dirname, '../../src/database/schema.sql');
     const schema = await fs.readFile(schemaPath, 'utf-8');
 
+    // Check FTS5 support - sql.js does not support FTS5
+    const hasFTS5 = this.db.checkFTS5Support();
+
     // Parse SQL statements properly (handles BEGIN...END blocks in triggers)
     const statements = this.parseSQLStatements(schema);
 
     for (const statement of statements) {
-      if (statement.trim()) {
-        try {
-          this.db.exec(statement);
-        } catch (error) {
-          logger.error(`Failed to execute SQL statement: ${statement.substring(0, 100)}...`, error);
-          throw error;
+      const trimmed = statement.trim();
+      if (!trimmed) continue;
+
+      // When FTS5 is not supported, skip FTS5 virtual tables and their triggers
+      if (!hasFTS5) {
+        const upper = trimmed.toUpperCase();
+        if (upper.startsWith('CREATE VIRTUAL TABLE') && upper.includes('USING FTS5')) {
+          logger.debug('Skipping FTS5 virtual table (not supported by current adapter)');
+          continue;
         }
+        if (upper.startsWith('CREATE TRIGGER') && upper.includes('_FTS')) {
+          logger.debug('Skipping FTS5 trigger (not supported by current adapter)');
+          continue;
+        }
+      }
+
+      try {
+        this.db.exec(trimmed);
+      } catch (error) {
+        logger.error(`Failed to execute SQL statement: ${trimmed.substring(0, 100)}...`, error);
+        throw error;
       }
     }
   }

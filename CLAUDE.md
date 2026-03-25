@@ -44,6 +44,7 @@ src/
 ├── integrations/
 │   └── chatwoot/              # Chatwoot integration (fork-specific)
 │       ├── chatwoot-integration.ts  # Main integration class with templates and validation
+│       ├── chatwoot-node-catalog.ts # Static node definitions for MCP database registration
 │       ├── connection-validator.ts   # Multi-API connection testing with error classification
 │       ├── workflow-templates.ts     # 5 pre-built Chatwoot workflow templates
 │       └── index.ts                 # Barrel exports
@@ -166,12 +167,15 @@ This fork adds Chatwoot support to the upstream n8n-mcp server. The integration 
 
 **Key components:**
 - **`chatwoot-integration.ts`**: Main class with template generation and validation logic
+- **`chatwoot-node-catalog.ts`**: Static catalog definitions for main + trigger nodes, registered during `npm run rebuild`
 - **`connection-validator.ts`**: Multi-API connection testing with AbortController timeout (10s), error classification (network/dns/timeout/ssl/invalid_url), HTTP status mapping, and secret sanitization
 - **`workflow-templates.ts`**: 5 pre-built workflow templates (monitoring, sync, messaging, automation, public API)
 - **`tools-chatwoot.ts`**: Single MCP tool definition (`chatwoot_doctor`) with annotations
 - **`handlers-chatwoot.ts`**: Handler implementation (~196 lines) — checks server version, Docker, n8n API, Chatwoot credentials, templates, and optional Chatwoot API connectivity
 
-**Tests:** `tests/chatwoot-connection-validator.test.ts` + `tests/handlers-chatwoot.test.ts` (19 tests, 88%+ coverage)
+**Community node validation:** The workflow validator emits a warning (code `COMMUNITY_NODE_NOT_IN_CATALOG`) instead of an error for unknown community nodes, keeping `result.valid === true`. Registered Chatwoot nodes validate normally.
+
+**Tests:** `tests/chatwoot-connection-validator.test.ts` + `tests/handlers-chatwoot.test.ts` + `tests/unit/chatwoot/` + `tests/unit/services/workflow-validator-community-nodes.test.ts` (30 tests)
 
 ### Sister Project: n8n-nodes-chatwoot
 

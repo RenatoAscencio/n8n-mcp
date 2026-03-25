@@ -169,18 +169,29 @@ async function createSQLJSAdapter(dbPath: string): Promise<DatabaseAdapter> {
     }
   });
   
-  // Try to load existing database
+  // Try to load existing database (skip for in-memory databases)
   let db: any;
-  try {
-    const data = await fs.readFile(dbPath);
-    db = new SQL.Database(new Uint8Array(data));
-    logger.info(`Loaded existing database from ${dbPath}`);
-  } catch (error) {
-    // Create new database if file doesn't exist
+  if (dbPath === ':memory:') {
     db = new SQL.Database();
-    logger.info(`Created new database at ${dbPath}`);
+    logger.info('Created new in-memory database');
+  } else {
+    try {
+      const data = await fs.readFile(dbPath);
+      db = new SQL.Database(new Uint8Array(data));
+      logger.info(`Loaded existing database from ${dbPath}`);
+    } catch (error) {
+      // Create new database if file doesn't exist and write initial empty file
+      db = new SQL.Database();
+      logger.info(`Created new database at ${dbPath}`);
+      try {
+        const emptyData = db.export();
+        fsSync.writeFileSync(dbPath, emptyData);
+      } catch (writeError) {
+        logger.warn(`Could not write initial database file at ${dbPath}`, writeError);
+      }
+    }
   }
-  
+
   return new SQLJSAdapter(db, dbPath);
 }
 
@@ -353,6 +364,11 @@ class SQLJSAdapter implements DatabaseAdapter {
   }
   
   private saveToFile(): void {
+    // In-memory databases are not persisted to disk
+    if (this.dbPath === ':memory:') {
+      return;
+    }
+
     try {
       // Export database to Uint8Array (2-5MB typical)
       const data = this.db.export();
@@ -469,10 +485,9 @@ class SQLJSStatement implements PreparedStatement {
     } catch (error) {
       this.stmt.reset();
       throw error;
-    } finally {
-      // Free statement memory after write operation completes
-      this.freeStatement();
     }
+    // Note: statement is NOT freed here to allow reuse (prepare-once, run-many pattern).
+    // Memory is managed by the SQLJSAdapter.close() lifecycle.
   }
 
   get(...params: any[]): any {
@@ -495,10 +510,9 @@ class SQLJSStatement implements PreparedStatement {
     } catch (error) {
       this.stmt.reset();
       throw error;
-    } finally {
-      // Free statement memory after read operation completes
-      this.freeStatement();
     }
+    // Note: statement is NOT freed here to allow reuse (prepare-once, run-many pattern).
+    // Memory is managed by the SQLJSAdapter.close() lifecycle.
   }
 
   all(...params: any[]): any[] {
@@ -520,10 +534,9 @@ class SQLJSStatement implements PreparedStatement {
     } catch (error) {
       this.stmt.reset();
       throw error;
-    } finally {
-      // Free statement memory after read operation completes
-      this.freeStatement();
     }
+    // Note: statement is NOT freed here to allow reuse (prepare-once, run-many pattern).
+    // Memory is managed by the SQLJSAdapter.close() lifecycle.
   }
   
   iterate(...params: any[]): IterableIterator<any> {

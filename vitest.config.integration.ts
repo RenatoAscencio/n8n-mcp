@@ -13,11 +13,12 @@ export default mergeConfig(
       // Integration tests might need more time
       testTimeout: 30000,
       // Specific pool options for integration tests
+      // Must use 'forks' to match base config pool setting
       poolOptions: {
-        threads: {
+        forks: {
           // Run integration tests sequentially by default
-          singleThread: true,
-          maxThreads: 1
+          singleFork: true,
+          maxForks: 1
         }
       },
       // Disable coverage for integration tests or set lower thresholds
