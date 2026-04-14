@@ -4,6 +4,19 @@ exports.sanitizeNode = sanitizeNode;
 exports.sanitizeWorkflowNodes = sanitizeWorkflowNodes;
 exports.validateNodeMetadata = validateNodeMetadata;
 const logger_1 = require("../utils/logger");
+const OPERATOR_CORRECTIONS = {
+    'isEmpty': 'empty',
+    'isNotEmpty': 'notEmpty',
+};
+const UNARY_OPERATORS = new Set([
+    'true',
+    'false',
+    'isNumeric',
+    'empty',
+    'notEmpty',
+    'exists',
+    'notExists',
+]);
 function sanitizeNode(node) {
     const sanitized = { ...node };
     if (isFilterBasedNode(node.type, node.typeVersion)) {
@@ -17,7 +30,7 @@ function sanitizeWorkflowNodes(workflow) {
     }
     return {
         ...workflow,
-        nodes: workflow.nodes.map((node) => sanitizeNode(node))
+        nodes: workflow.nodes.map(sanitizeNode)
     };
 }
 function isFilterBasedNode(nodeType, typeVersion) {
@@ -66,7 +79,7 @@ function sanitizeFilterConditions(conditions) {
         ...sanitized.options
     };
     if (sanitized.conditions && Array.isArray(sanitized.conditions)) {
-        sanitized.conditions = sanitized.conditions.map((condition) => sanitizeCondition(condition));
+        sanitized.conditions = sanitized.conditions.map(sanitizeCondition);
     }
     return sanitized;
 }
@@ -92,10 +105,12 @@ function sanitizeOperator(operator) {
         const typeValue = sanitized.type;
         if (isOperationName(typeValue)) {
             logger_1.logger.debug(`Fixing operator structure: converting type="${typeValue}" to operation`);
-            const dataType = inferDataType(typeValue);
-            sanitized.type = dataType;
+            sanitized.type = inferDataType(typeValue);
             sanitized.operation = typeValue;
         }
+    }
+    if (sanitized.operation && OPERATOR_CORRECTIONS[sanitized.operation]) {
+        sanitized.operation = OPERATOR_CORRECTIONS[sanitized.operation];
     }
     if (sanitized.operation) {
         if (isUnaryOperator(sanitized.operation)) {
@@ -112,7 +127,7 @@ function isOperationName(value) {
     return !dataTypes.includes(value) && /^[a-z][a-zA-Z]*$/.test(value);
 }
 function inferDataType(operation) {
-    const booleanOps = ['true', 'false', 'isEmpty', 'isNotEmpty'];
+    const booleanOps = ['true', 'false'];
     if (booleanOps.includes(operation)) {
         return 'boolean';
     }
@@ -124,17 +139,14 @@ function inferDataType(operation) {
     if (dateOps.some(op => operation.includes(op))) {
         return 'dateTime';
     }
+    const objectOps = ['empty', 'notEmpty', 'exists', 'notExists'];
+    if (objectOps.includes(operation)) {
+        return 'object';
+    }
     return 'string';
 }
 function isUnaryOperator(operation) {
-    const unaryOps = [
-        'isEmpty',
-        'isNotEmpty',
-        'true',
-        'false',
-        'isNumeric'
-    ];
-    return unaryOps.includes(operation);
+    return UNARY_OPERATORS.has(operation);
 }
 function generateConditionId() {
     return `condition-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;

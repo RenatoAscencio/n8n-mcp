@@ -48,10 +48,21 @@ class N8nApiClient {
         this.versionPromise = null;
         const { baseUrl, apiKey, timeout = 30000, maxRetries = 3 } = config;
         this.maxRetries = maxRetries;
-        this.baseUrl = baseUrl;
-        const apiUrl = baseUrl.endsWith('/api/v1')
-            ? baseUrl
-            : `${baseUrl.replace(/\/$/, '')}/api/v1`;
+        let normalizedBase;
+        try {
+            const parsed = new URL(baseUrl);
+            parsed.hash = '';
+            parsed.username = '';
+            parsed.password = '';
+            normalizedBase = parsed.toString().replace(/\/$/, '');
+        }
+        catch {
+            normalizedBase = baseUrl;
+        }
+        this.baseUrl = normalizedBase;
+        const apiUrl = normalizedBase.endsWith('/api/v1')
+            ? normalizedBase
+            : `${normalizedBase}/api/v1`;
         this.client = axios_1.default.create({
             baseURL: apiUrl,
             timeout,
@@ -61,9 +72,10 @@ class N8nApiClient {
             },
         });
         this.client.interceptors.request.use((config) => {
+            const isSensitive = config.url?.includes('/credentials') && config.method !== 'get';
             logger_1.logger.debug(`n8n API Request: ${config.method?.toUpperCase()} ${config.url}`, {
                 params: config.params,
-                data: config.data,
+                data: isSensitive ? '[REDACTED]' : config.data,
             });
             return config;
         }, (error) => {
@@ -96,11 +108,7 @@ class N8nApiClient {
         }
     }
     async fetchVersionOnce() {
-        let version = (0, n8n_version_1.getCachedVersion)(this.baseUrl);
-        if (!version) {
-            version = await (0, n8n_version_1.fetchN8nVersion)(this.baseUrl);
-        }
-        return version;
+        return (0, n8n_version_1.getCachedVersion)(this.baseUrl) ?? await (0, n8n_version_1.fetchN8nVersion)(this.baseUrl);
     }
     getCachedVersionInfo() {
         return this.versionInfo;
@@ -194,9 +202,17 @@ class N8nApiClient {
             throw (0, n8n_errors_1.handleN8nApiError)(error);
         }
     }
+    async transferWorkflow(id, destinationProjectId) {
+        try {
+            await this.client.put(`/workflows/${id}/transfer`, { destinationProjectId });
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
     async activateWorkflow(id) {
         try {
-            const response = await this.client.post(`/workflows/${id}/activate`);
+            const response = await this.client.post(`/workflows/${id}/activate`, {});
             return response.data;
         }
         catch (error) {
@@ -205,7 +221,7 @@ class N8nApiClient {
     }
     async deactivateWorkflow(id) {
         try {
-            const response = await this.client.post(`/workflows/${id}/deactivate`);
+            const response = await this.client.post(`/workflows/${id}/deactivate`, {});
             return response.data;
         }
         catch (error) {
@@ -220,6 +236,38 @@ class N8nApiClient {
         catch (error) {
             throw (0, n8n_errors_1.handleN8nApiError)(error);
         }
+    }
+    async generateAudit(options) {
+        try {
+            const additionalOptions = {};
+            if (options?.categories)
+                additionalOptions.categories = options.categories;
+            if (options?.daysAbandonedWorkflow !== undefined)
+                additionalOptions.daysAbandonedWorkflow = options.daysAbandonedWorkflow;
+            const body = Object.keys(additionalOptions).length > 0 ? { additionalOptions } : {};
+            const response = await this.client.post('/audit', body);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async listAllWorkflows() {
+        const allWorkflows = [];
+        let cursor;
+        const seenCursors = new Set();
+        const PAGE_SIZE = 100;
+        const MAX_PAGES = 50;
+        for (let page = 0; page < MAX_PAGES; page++) {
+            const params = { limit: PAGE_SIZE, cursor };
+            const response = await this.listWorkflows(params);
+            allWorkflows.push(...response.data);
+            if (!response.nextCursor || seenCursors.has(response.nextCursor))
+                break;
+            seenCursors.add(response.nextCursor);
+            cursor = response.nextCursor;
+        }
+        return allWorkflows;
     }
     async getExecution(id, includeData = false) {
         try {
@@ -330,6 +378,15 @@ class N8nApiClient {
             throw (0, n8n_errors_1.handleN8nApiError)(error);
         }
     }
+    async getCredentialSchema(typeName) {
+        try {
+            const response = await this.client.get(`/credentials/schema/${typeName}`);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
     async listTags(params = {}) {
         try {
             const response = await this.client.get('/tags', { params });
@@ -360,6 +417,15 @@ class N8nApiClient {
     async deleteTag(id) {
         try {
             await this.client.delete(`/tags/${id}`);
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async updateWorkflowTags(workflowId, tagIds) {
+        try {
+            const response = await this.client.put(`/workflows/${workflowId}/tags`, tagIds.filter(id => id).map(id => ({ id })));
+            return response.data;
         }
         catch (error) {
             throw (0, n8n_errors_1.handleN8nApiError)(error);
@@ -430,6 +496,110 @@ class N8nApiClient {
         catch (error) {
             throw (0, n8n_errors_1.handleN8nApiError)(error);
         }
+    }
+    async createDataTable(params) {
+        try {
+            const response = await this.client.post('/data-tables', params);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async listDataTables(params = {}) {
+        try {
+            const response = await this.client.get('/data-tables', { params });
+            return this.validateListResponse(response.data, 'data-tables');
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async getDataTable(id) {
+        try {
+            const response = await this.client.get(`/data-tables/${id}`);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async updateDataTable(id, params) {
+        try {
+            const response = await this.client.patch(`/data-tables/${id}`, params);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async deleteDataTable(id) {
+        try {
+            await this.client.delete(`/data-tables/${id}`);
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async getDataTableRows(id, params = {}) {
+        try {
+            const response = await this.client.get(`/data-tables/${id}/rows`, {
+                params,
+                paramsSerializer: (p) => this.serializeDataTableParams(p),
+            });
+            return this.validateListResponse(response.data, 'data-table-rows');
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async insertDataTableRows(id, params) {
+        try {
+            const response = await this.client.post(`/data-tables/${id}/rows`, params);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async updateDataTableRows(id, params) {
+        try {
+            const response = await this.client.patch(`/data-tables/${id}/rows/update`, params);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async upsertDataTableRow(id, params) {
+        try {
+            const response = await this.client.post(`/data-tables/${id}/rows/upsert`, params);
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    async deleteDataTableRows(id, params) {
+        try {
+            const response = await this.client.delete(`/data-tables/${id}/rows/delete`, {
+                params,
+                paramsSerializer: (p) => this.serializeDataTableParams(p),
+            });
+            return response.data;
+        }
+        catch (error) {
+            throw (0, n8n_errors_1.handleN8nApiError)(error);
+        }
+    }
+    serializeDataTableParams(params) {
+        const parts = [];
+        for (const [key, value] of Object.entries(params)) {
+            if (value === undefined || value === null)
+                continue;
+            parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+        }
+        return parts.join('&');
     }
     validateListResponse(responseData, resourceType) {
         if (!responseData || typeof responseData !== 'object') {

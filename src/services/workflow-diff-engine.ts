@@ -28,7 +28,9 @@ import {
   ActivateWorkflowOperation,
   DeactivateWorkflowOperation,
   CleanStaleConnectionsOperation,
-  ReplaceConnectionsOperation
+  ReplaceConnectionsOperation,
+  TransferWorkflowOperation,
+  PatchNodeFieldOperation
 } from '../types/workflow-diff';
 import { Workflow, WorkflowNode, WorkflowConnection } from '../types/n8n-api';
 import { Logger } from '../utils/logger';
@@ -38,11 +40,73 @@ import { isActivatableTrigger } from '../utils/node-type-utils';
 
 const logger = new Logger({ prefix: '[WorkflowDiffEngine]' });
 
+// Safety limits for patchNodeField operations
+const PATCH_LIMITS = {
+  MAX_PATCHES: 50,           // Max patches per operation
+  MAX_REGEX_LENGTH: 500,     // Max regex pattern length (chars)
+  MAX_FIELD_SIZE_REGEX: 512 * 1024, // Max field size for regex operations (512KB)
+};
+
+// Keys that must never appear in property paths (prototype pollution prevention)
+const DANGEROUS_PATH_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Check if a regex pattern contains constructs known to cause catastrophic backtracking.
+ * Detects nested quantifiers like (a+)+, (a*)+, (a+)*, (a|b+)+ etc.
+ */
+function isUnsafeRegex(pattern: string): boolean {
+  // Detect nested quantifiers: a quantifier applied to a group that itself contains a quantifier
+  // Examples: (a+)+, (a+)*, (.*)+, (\w+)*, (a|b+)+
+  // This catches the most common ReDoS patterns
+  const nestedQuantifier = /\([^)]*[+*][^)]*\)[+*{]/;
+  if (nestedQuantifier.test(pattern)) return true;
+
+  // Detect overlapping alternations with quantifiers: (a|a)+, (\w|\d)+
+  const overlappingAlternation = /\([^)]*\|[^)]*\)[+*{]/;
+  // Only flag if alternation branches share characters (heuristic: both contain \w, ., or same literal)
+  if (overlappingAlternation.test(pattern)) {
+    const match = pattern.match(/\(([^)]*)\|([^)]*)\)[+*{]/);
+    if (match) {
+      const [, left, right] = match;
+      // Flag if both branches use broad character classes
+      const broadClasses = ['.', '\\w', '\\d', '\\s', '\\S', '\\W', '\\D', '[^'];
+      const leftHasBroad = broadClasses.some(c => left.includes(c));
+      const rightHasBroad = broadClasses.some(c => right.includes(c));
+      if (leftHasBroad && rightHasBroad) return true;
+    }
+  }
+
+  return false;
+}
+
+function countOccurrences(str: string, search: string): number {
+  let count = 0;
+  let pos = 0;
+  while ((pos = str.indexOf(search, pos)) !== -1) {
+    count++;
+    pos += search.length;
+  }
+  return count;
+}
+
+/**
+ * Not safe for concurrent use — create a new instance per request.
+ * Instance state is reset at the start of each applyDiff() call.
+ */
 export class WorkflowDiffEngine {
   // Track node name changes during operations for connection reference updates
   private renameMap: Map<string, string> = new Map();
   // Track warnings during operation processing
   private warnings: WorkflowDiffValidationError[] = [];
+  // Track which nodes were added/updated so sanitization only runs on them
+  private modifiedNodeIds = new Set<string>();
+  // Track removed node names for better error messages
+  private removedNodeNames = new Set<string>();
+  // Track tag operations for dedicated API calls
+  private tagsToAdd: string[] = [];
+  private tagsToRemove: string[] = [];
+  // Track transfer operation for dedicated API call
+  private transferToProjectId: string | undefined;
 
   /**
    * Apply diff operations to a workflow
@@ -55,12 +119,17 @@ export class WorkflowDiffEngine {
       // Reset tracking for this diff operation
       this.renameMap.clear();
       this.warnings = [];
+      this.modifiedNodeIds.clear();
+      this.removedNodeNames.clear();
+      this.tagsToAdd = [];
+      this.tagsToRemove = [];
+      this.transferToProjectId = undefined;
 
       // Clone workflow to avoid modifying original
       const workflowCopy = JSON.parse(JSON.stringify(workflow));
 
       // Group operations by type for two-pass processing
-      const nodeOperationTypes = ['addNode', 'removeNode', 'updateNode', 'moveNode', 'enableNode', 'disableNode'];
+      const nodeOperationTypes = ['addNode', 'removeNode', 'updateNode', 'patchNodeField', 'moveNode', 'enableNode', 'disableNode'];
       const nodeOperations: Array<{ operation: WorkflowDiffOperation; index: number }> = [];
       const otherOperations: Array<{ operation: WorkflowDiffOperation; index: number }> = [];
 
@@ -126,6 +195,12 @@ export class WorkflowDiffEngine {
           };
         }
 
+        // Extract and clean up activation flags (same as atomic mode)
+        const shouldActivate = (workflowCopy as any)._shouldActivate === true;
+        const shouldDeactivate = (workflowCopy as any)._shouldDeactivate === true;
+        delete (workflowCopy as any)._shouldActivate;
+        delete (workflowCopy as any)._shouldDeactivate;
+
         const success = appliedIndices.length > 0;
         return {
           success,
@@ -135,7 +210,12 @@ export class WorkflowDiffEngine {
           errors: errors.length > 0 ? errors : undefined,
           warnings: this.warnings.length > 0 ? this.warnings : undefined,
           applied: appliedIndices,
-          failed: failedIndices
+          failed: failedIndices,
+          shouldActivate: shouldActivate || undefined,
+          shouldDeactivate: shouldDeactivate || undefined,
+          tagsToAdd: this.tagsToAdd.length > 0 ? this.tagsToAdd : undefined,
+          tagsToRemove: this.tagsToRemove.length > 0 ? this.tagsToRemove : undefined,
+          transferToProjectId: this.transferToProjectId || undefined
         };
       } else {
         // Atomic mode: all operations must succeed
@@ -201,12 +281,16 @@ export class WorkflowDiffEngine {
           }
         }
 
-        // Sanitize ALL nodes in the workflow after operations are applied
-        // This ensures existing invalid nodes (e.g., binary operators with singleValue: true)
-        // are fixed automatically when any update is made to the workflow
-        workflowCopy.nodes = workflowCopy.nodes.map((node: WorkflowNode) => sanitizeNode(node));
-
-        logger.debug('Applied full-workflow sanitization to all nodes');
+        // Sanitize only modified nodes to avoid breaking unrelated nodes (#592)
+        if (this.modifiedNodeIds.size > 0) {
+          workflowCopy.nodes = workflowCopy.nodes.map((node: WorkflowNode) => {
+            if (this.modifiedNodeIds.has(node.id)) {
+              return sanitizeNode(node);
+            }
+            return node;
+          });
+          logger.debug(`Sanitized ${this.modifiedNodeIds.size} modified nodes`);
+        }
 
         // If validateOnly flag is set, return success without applying
         if (request.validateOnly) {
@@ -233,7 +317,10 @@ export class WorkflowDiffEngine {
           message: `Successfully applied ${operationsApplied} operations (${nodeOperations.length} node ops, ${otherOperations.length} other ops)`,
           warnings: this.warnings.length > 0 ? this.warnings : undefined,
           shouldActivate: shouldActivate || undefined,
-          shouldDeactivate: shouldDeactivate || undefined
+          shouldDeactivate: shouldDeactivate || undefined,
+          tagsToAdd: this.tagsToAdd.length > 0 ? this.tagsToAdd : undefined,
+          tagsToRemove: this.tagsToRemove.length > 0 ? this.tagsToRemove : undefined,
+          transferToProjectId: this.transferToProjectId || undefined
         };
       }
     } catch (error) {
@@ -248,7 +335,6 @@ export class WorkflowDiffEngine {
     }
   }
 
-
   /**
    * Validate a single operation
    */
@@ -260,6 +346,8 @@ export class WorkflowDiffEngine {
         return this.validateRemoveNode(workflow, operation);
       case 'updateNode':
         return this.validateUpdateNode(workflow, operation);
+      case 'patchNodeField':
+        return this.validatePatchNodeField(workflow, operation as PatchNodeFieldOperation);
       case 'moveNode':
         return this.validateMoveNode(workflow, operation);
       case 'enableNode':
@@ -276,6 +364,8 @@ export class WorkflowDiffEngine {
       case 'addTag':
       case 'removeTag':
         return null; // These are always valid
+      case 'transferWorkflow':
+        return this.validateTransferWorkflow(workflow, operation as TransferWorkflowOperation);
       case 'activateWorkflow':
         return this.validateActivateWorkflow(workflow, operation);
       case 'deactivateWorkflow':
@@ -302,6 +392,9 @@ export class WorkflowDiffEngine {
         break;
       case 'updateNode':
         this.applyUpdateNode(workflow, operation);
+        break;
+      case 'patchNodeField':
+        this.applyPatchNodeField(workflow, operation as PatchNodeFieldOperation);
         break;
       case 'moveNode':
         this.applyMoveNode(workflow, operation);
@@ -344,6 +437,9 @@ export class WorkflowDiffEngine {
         break;
       case 'replaceConnections':
         this.applyReplaceConnections(workflow, operation);
+        break;
+      case 'transferWorkflow':
+        this.applyTransferWorkflow(workflow, operation as TransferWorkflowOperation);
         break;
     }
   }
@@ -405,7 +501,7 @@ export class WorkflowDiffEngine {
 
     // Check for missing required parameter
     if (!operation.updates) {
-      return `Missing required parameter 'updates'. The updateNode operation requires an 'updates' object containing properties to modify. Example: {type: "updateNode", nodeId: "abc", updates: {name: "New Name"}}`;
+      return `Missing required parameter 'updates'. The updateNode operation requires an 'updates' object. Correct structure: {type: "updateNode", nodeId: "abc-123" OR nodeName: "My Node", updates: {name: "New Name", "parameters.url": "https://example.com"}}`;
     }
 
     const node = this.findNode(workflow, operation.nodeId, operation.nodeName);
@@ -427,6 +523,102 @@ export class WorkflowDiffEngine {
           return `Cannot rename node "${node.name}" to "${operation.updates.name}": A node with that name already exists (id: ${collision.id.substring(0, 8)}...). Please choose a different name.`;
         }
       }
+    }
+
+    // Validate __patch_find_replace syntax (#642)
+    for (const [path, value] of Object.entries(operation.updates)) {
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)
+          && '__patch_find_replace' in value) {
+        const patches = value.__patch_find_replace;
+        if (!Array.isArray(patches)) {
+          return `Invalid __patch_find_replace at "${path}": must be an array of {find, replace} objects`;
+        }
+        for (let i = 0; i < patches.length; i++) {
+          const patch = patches[i];
+          if (!patch || typeof patch.find !== 'string' || typeof patch.replace !== 'string') {
+            return `Invalid __patch_find_replace entry at "${path}[${i}]": each entry must have "find" (string) and "replace" (string)`;
+          }
+        }
+        // node was already found above — reuse it
+        const currentValue = this.getNestedProperty(node, path);
+        if (currentValue === undefined) {
+          return `Cannot apply __patch_find_replace to "${path}": property does not exist on node`;
+        }
+        if (typeof currentValue !== 'string') {
+          return `Cannot apply __patch_find_replace to "${path}": current value is ${typeof currentValue}, expected string`;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private validatePatchNodeField(workflow: Workflow, operation: PatchNodeFieldOperation): string | null {
+    if (!operation.nodeId && !operation.nodeName) {
+      return `patchNodeField requires either "nodeId" or "nodeName"`;
+    }
+
+    if (!operation.fieldPath || typeof operation.fieldPath !== 'string') {
+      return `patchNodeField requires a "fieldPath" string (e.g., "parameters.jsCode")`;
+    }
+
+    // Prototype pollution protection
+    const pathSegments = operation.fieldPath.split('.');
+    if (pathSegments.some(k => DANGEROUS_PATH_KEYS.has(k))) {
+      return `patchNodeField: fieldPath "${operation.fieldPath}" contains a forbidden key (__proto__, constructor, or prototype)`;
+    }
+
+    if (!Array.isArray(operation.patches) || operation.patches.length === 0) {
+      return `patchNodeField requires a non-empty "patches" array of {find, replace} objects`;
+    }
+
+    // Resource limit: max patches per operation
+    if (operation.patches.length > PATCH_LIMITS.MAX_PATCHES) {
+      return `patchNodeField: too many patches (${operation.patches.length}). Maximum is ${PATCH_LIMITS.MAX_PATCHES} per operation. Split into multiple operations if needed.`;
+    }
+
+    for (let i = 0; i < operation.patches.length; i++) {
+      const patch = operation.patches[i];
+      if (!patch || typeof patch.find !== 'string' || typeof patch.replace !== 'string') {
+        return `Invalid patch entry at index ${i}: each entry must have "find" (string) and "replace" (string)`;
+      }
+      if (patch.find.length === 0) {
+        return `Invalid patch entry at index ${i}: "find" must not be empty`;
+      }
+      if (patch.regex) {
+        // Resource limit: max regex pattern length
+        if (patch.find.length > PATCH_LIMITS.MAX_REGEX_LENGTH) {
+          return `Regex pattern at patch index ${i} is too long (${patch.find.length} chars). Maximum is ${PATCH_LIMITS.MAX_REGEX_LENGTH} characters.`;
+        }
+        try {
+          new RegExp(patch.find);
+        } catch (e) {
+          return `Invalid regex pattern at patch index ${i}: ${e instanceof Error ? e.message : 'invalid regex'}`;
+        }
+        // ReDoS protection: reject patterns with nested quantifiers
+        if (isUnsafeRegex(patch.find)) {
+          return `Potentially unsafe regex pattern at patch index ${i}: nested quantifiers or overlapping alternations can cause excessive backtracking. Simplify the pattern or use literal matching (regex: false).`;
+        }
+      }
+    }
+
+    const node = this.findNode(workflow, operation.nodeId, operation.nodeName);
+    if (!node) {
+      return this.formatNodeNotFoundError(workflow, operation.nodeId || operation.nodeName || '', 'patchNodeField');
+    }
+
+    const currentValue = this.getNestedProperty(node, operation.fieldPath);
+    if (currentValue === undefined) {
+      return `Cannot apply patchNodeField to "${operation.fieldPath}": property does not exist on node "${node.name}"`;
+    }
+    if (typeof currentValue !== 'string') {
+      return `Cannot apply patchNodeField to "${operation.fieldPath}": current value is ${typeof currentValue}, expected string`;
+    }
+
+    // Resource limit: cap field size for regex operations
+    const hasRegex = operation.patches.some(p => p.regex);
+    if (hasRegex && typeof currentValue === 'string' && currentValue.length > PATCH_LIMITS.MAX_FIELD_SIZE_REGEX) {
+      return `Field "${operation.fieldPath}" is too large for regex operations (${Math.round(currentValue.length / 1024)}KB). Maximum is ${PATCH_LIMITS.MAX_FIELD_SIZE_REGEX / 1024}KB. Use literal matching (regex: false) for large fields.`;
     }
 
     return null;
@@ -510,12 +702,18 @@ export class WorkflowDiffEngine {
     const targetNode = this.findNode(workflow, operation.target, operation.target);
 
     if (!sourceNode) {
+      if (this.removedNodeNames.has(operation.source)) {
+        return `Source node "${operation.source}" was already removed by a prior removeNode operation. Its connections were automatically cleaned up — no separate removeConnection needed.`;
+      }
       const availableNodes = workflow.nodes
         .map(n => `"${n.name}" (id: ${n.id.substring(0, 8)}...)`)
         .join(', ');
       return `Source node not found: "${operation.source}". Available nodes: ${availableNodes}. Tip: Use node ID for names with special characters.`;
     }
     if (!targetNode) {
+      if (this.removedNodeNames.has(operation.target)) {
+        return `Target node "${operation.target}" was already removed by a prior removeNode operation. Its connections were automatically cleaned up — no separate removeConnection needed.`;
+      }
       const availableNodes = workflow.nodes
         .map(n => `"${n.name}" (id: ${n.id.substring(0, 8)}...)`)
         .join(', ');
@@ -614,13 +812,16 @@ export class WorkflowDiffEngine {
     // Sanitize node to ensure complete metadata (filter options, operator structure, etc.)
     const sanitizedNode = sanitizeNode(newNode);
 
+    this.modifiedNodeIds.add(sanitizedNode.id);
     workflow.nodes.push(sanitizedNode);
   }
 
   private applyRemoveNode(workflow: Workflow, operation: RemoveNodeOperation): void {
     const node = this.findNode(workflow, operation.nodeId, operation.nodeName);
     if (!node) return;
-    
+
+    this.removedNodeNames.add(node.name);
+
     // Remove node from array
     const index = workflow.nodes.findIndex(n => n.id === node.id);
     if (index !== -1) {
@@ -631,29 +832,35 @@ export class WorkflowDiffEngine {
     delete workflow.connections[node.name];
     
     // Remove all connections to this node
-    Object.keys(workflow.connections).forEach(sourceName => {
-      const sourceConnections = workflow.connections[sourceName];
-      Object.keys(sourceConnections).forEach(outputName => {
-        sourceConnections[outputName] = sourceConnections[outputName].map(connections =>
+    for (const [sourceName, sourceConnections] of Object.entries(workflow.connections)) {
+      for (const [outputName, outputConns] of Object.entries(sourceConnections)) {
+        sourceConnections[outputName] = outputConns.map(connections =>
           connections.filter(conn => conn.node !== node.name)
-        ).filter(connections => connections.length > 0);
-        
-        // Clean up empty arrays
-        if (sourceConnections[outputName].length === 0) {
+        );
+
+        // Trim trailing empty arrays only (preserve intermediate empty arrays for positional indices)
+        const trimmed = sourceConnections[outputName];
+        while (trimmed.length > 0 && trimmed[trimmed.length - 1].length === 0) {
+          trimmed.pop();
+        }
+
+        if (trimmed.length === 0) {
           delete sourceConnections[outputName];
         }
-      });
-      
+      }
+
       // Clean up empty connection objects
       if (Object.keys(sourceConnections).length === 0) {
         delete workflow.connections[sourceName];
       }
-    });
+    }
   }
 
   private applyUpdateNode(workflow: Workflow, operation: UpdateNodeOperation): void {
     const node = this.findNode(workflow, operation.nodeId, operation.nodeName);
     if (!node) return;
+
+    this.modifiedNodeIds.add(node.id);
 
     // Track node renames for connection reference updates
     if (operation.updates.name && operation.updates.name !== node.name) {
@@ -665,7 +872,26 @@ export class WorkflowDiffEngine {
 
     // Apply updates using dot notation
     Object.entries(operation.updates).forEach(([path, value]) => {
-      this.setNestedProperty(node, path, value);
+      // Handle __patch_find_replace for surgical string edits (#642)
+      // Format and type validation already passed in validateUpdateNode()
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)
+          && '__patch_find_replace' in value) {
+        const patches = value.__patch_find_replace as Array<{ find: string; replace: string }>;
+        let current = this.getNestedProperty(node, path) as string;
+        for (const patch of patches) {
+          if (!current.includes(patch.find)) {
+            this.warnings.push({
+              operation: -1,
+              message: `__patch_find_replace: "${patch.find.substring(0, 50)}" not found in "${path}". Skipped.`
+            });
+            continue;
+          }
+          current = current.replace(patch.find, patch.replace);
+        }
+        this.setNestedProperty(node, path, current);
+      } else {
+        this.setNestedProperty(node, path, value);
+      }
     });
 
     // Sanitize node after updates to ensure metadata is complete
@@ -675,10 +901,74 @@ export class WorkflowDiffEngine {
     Object.assign(node, sanitized);
   }
 
+  private applyPatchNodeField(workflow: Workflow, operation: PatchNodeFieldOperation): void {
+    const node = this.findNode(workflow, operation.nodeId, operation.nodeName);
+    if (!node) return;
+
+    this.modifiedNodeIds.add(node.id);
+
+    let current = this.getNestedProperty(node, operation.fieldPath) as string;
+
+    for (let i = 0; i < operation.patches.length; i++) {
+      const patch = operation.patches[i];
+
+      if (patch.regex) {
+        const globalRegex = new RegExp(patch.find, 'g');
+        const matches = current.match(globalRegex);
+
+        if (!matches || matches.length === 0) {
+          throw new Error(
+            `patchNodeField: regex pattern "${patch.find}" not found in "${operation.fieldPath}" (patch index ${i}). ` +
+            `Use n8n_get_workflow to inspect the current value.`
+          );
+        }
+
+        if (matches.length > 1 && !patch.replaceAll) {
+          throw new Error(
+            `patchNodeField: regex pattern "${patch.find}" matches ${matches.length} times in "${operation.fieldPath}" (patch index ${i}). ` +
+            `Set "replaceAll": true to replace all occurrences, or refine the pattern to match exactly once.`
+          );
+        }
+
+        const regex = patch.replaceAll ? globalRegex : new RegExp(patch.find);
+        current = current.replace(regex, patch.replace);
+      } else {
+        const occurrences = countOccurrences(current, patch.find);
+
+        if (occurrences === 0) {
+          throw new Error(
+            `patchNodeField: "${patch.find.substring(0, 80)}" not found in "${operation.fieldPath}" (patch index ${i}). ` +
+            `Ensure the find string exactly matches the current content (including whitespace and newlines). ` +
+            `Use n8n_get_workflow to inspect the current value.`
+          );
+        }
+
+        if (occurrences > 1 && !patch.replaceAll) {
+          throw new Error(
+            `patchNodeField: "${patch.find.substring(0, 80)}" found ${occurrences} times in "${operation.fieldPath}" (patch index ${i}). ` +
+            `Set "replaceAll": true to replace all occurrences, or use a more specific find string that matches exactly once.`
+          );
+        }
+
+        if (patch.replaceAll) {
+          current = current.split(patch.find).join(patch.replace);
+        } else {
+          current = current.replace(patch.find, patch.replace);
+        }
+      }
+    }
+
+    this.setNestedProperty(node, operation.fieldPath, current);
+
+    // Sanitize node after updates
+    const sanitized = sanitizeNode(node);
+    Object.assign(node, sanitized);
+  }
+
   private applyMoveNode(workflow: Workflow, operation: MoveNodeOperation): void {
     const node = this.findNode(workflow, operation.nodeId, operation.nodeName);
     if (!node) return;
-    
+
     node.position = operation.position;
   }
 
@@ -706,9 +996,19 @@ export class WorkflowDiffEngine {
   ): { sourceOutput: string; sourceIndex: number } {
     const sourceNode = this.findNode(workflow, operation.source, operation.source);
 
-    // Start with explicit values or defaults
-    let sourceOutput = operation.sourceOutput ?? 'main';
+    // Start with explicit values or defaults, coercing to correct types
+    let sourceOutput = String(operation.sourceOutput ?? 'main');
     let sourceIndex = operation.sourceIndex ?? 0;
+
+    // Remap numeric sourceOutput (e.g., "0", "1") to "main" with sourceIndex (#537, #659)
+    // Skip when smart parameters (branch, case) are present — they take precedence
+    const numericOutput = /^\d+$/.test(sourceOutput) ? parseInt(sourceOutput, 10) : null;
+    if (numericOutput !== null
+        && (operation.sourceIndex === undefined || operation.sourceIndex === numericOutput)
+        && operation.branch === undefined && operation.case === undefined) {
+      sourceIndex = numericOutput;
+      sourceOutput = 'main';
+    }
 
     // Smart parameter: branch (for IF nodes)
     // IF nodes use 'main' output with index 0 (true) or 1 (false)
@@ -758,7 +1058,12 @@ export class WorkflowDiffEngine {
 
     // Use nullish coalescing to properly handle explicit 0 values
     // Default targetInput to sourceOutput to preserve connection type for AI connections (ai_tool, ai_memory, etc.)
-    const targetInput = operation.targetInput ?? sourceOutput;
+    // Coerce to string to handle numeric values passed as sourceOutput/targetInput
+    let targetInput = String(operation.targetInput ?? sourceOutput);
+    // Remap numeric targetInput (e.g., "0") to "main" — connection types are named strings (#659)
+    if (/^\d+$/.test(targetInput)) {
+      targetInput = 'main';
+    }
     const targetIndex = operation.targetIndex ?? 0;
 
     // Initialize source node connections object
@@ -795,18 +1100,14 @@ export class WorkflowDiffEngine {
   private applyRemoveConnection(workflow: Workflow, operation: RemoveConnectionOperation): void {
     const sourceNode = this.findNode(workflow, operation.source, operation.source);
     const targetNode = this.findNode(workflow, operation.target, operation.target);
-    // If ignoreErrors is true, silently succeed even if nodes don't exist
     if (!sourceNode || !targetNode) {
-      if (operation.ignoreErrors) {
-        return; // Gracefully handle missing nodes
-      }
-      return; // Should never reach here if validation passed, but safety check
+      return;
     }
     
-    const sourceOutput = operation.sourceOutput || 'main';
+    const sourceOutput = String(operation.sourceOutput ?? 'main');
     const connections = workflow.connections[sourceNode.name]?.[sourceOutput];
     if (!connections) return;
-    
+
     // Remove connection from all indices
     workflow.connections[sourceNode.name][sourceOutput] = connections.map(conns =>
       conns.filter(conn => conn.node !== targetNode.name)
@@ -877,20 +1178,26 @@ export class WorkflowDiffEngine {
   }
 
   private applyAddTag(workflow: Workflow, operation: AddTagOperation): void {
-    if (!workflow.tags) {
-      workflow.tags = [];
+    // Track for dedicated API call instead of modifying workflow.tags directly
+    // Reconcile: if previously marked for removal, cancel the removal instead
+    const removeIdx = this.tagsToRemove.indexOf(operation.tag);
+    if (removeIdx !== -1) {
+      this.tagsToRemove.splice(removeIdx, 1);
     }
-    if (!workflow.tags.includes(operation.tag)) {
-      workflow.tags.push(operation.tag);
+    if (!this.tagsToAdd.includes(operation.tag)) {
+      this.tagsToAdd.push(operation.tag);
     }
   }
 
   private applyRemoveTag(workflow: Workflow, operation: RemoveTagOperation): void {
-    if (!workflow.tags) return;
-
-    const index = workflow.tags.indexOf(operation.tag);
-    if (index !== -1) {
-      workflow.tags.splice(index, 1);
+    // Track for dedicated API call instead of modifying workflow.tags directly
+    // Reconcile: if previously marked for addition, cancel the addition instead
+    const addIdx = this.tagsToAdd.indexOf(operation.tag);
+    if (addIdx !== -1) {
+      this.tagsToAdd.splice(addIdx, 1);
+    }
+    if (!this.tagsToRemove.includes(operation.tag)) {
+      this.tagsToRemove.push(operation.tag);
     }
   }
 
@@ -925,6 +1232,18 @@ export class WorkflowDiffEngine {
     // Set flag in workflow object to indicate deactivation intent
     // The handler will call the API method after workflow update
     (workflow as any)._shouldDeactivate = true;
+  }
+
+  // Transfer operation — uses dedicated API call (PUT /workflows/{id}/transfer)
+  private validateTransferWorkflow(_workflow: Workflow, operation: TransferWorkflowOperation): string | null {
+    if (!operation.destinationProjectId) {
+      return 'transferWorkflow requires a non-empty destinationProjectId string';
+    }
+    return null;
+  }
+
+  private applyTransferWorkflow(_workflow: Workflow, operation: TransferWorkflowOperation): void {
+    this.transferToProjectId = operation.destinationProjectId;
   }
 
   // Connection cleanup operation validators
@@ -1015,7 +1334,12 @@ export class WorkflowDiffEngine {
             }
             return true;
           })
-        ).filter(conns => conns.length > 0);
+        );
+
+        // Trim trailing empty arrays only (preserve intermediate for positional indices)
+        while (filteredConnections.length > 0 && filteredConnections[filteredConnections.length - 1].length === 0) {
+          filteredConnections.pop();
+        }
 
         if (filteredConnections.length === 0) {
           delete outputs[outputName];
@@ -1075,9 +1399,10 @@ export class WorkflowDiffEngine {
             const connection = connectionsAtIndex[connIndex];
             // Check if target node was renamed
             if (renames.has(connection.node)) {
+              const oldTargetName = connection.node;
               const newTargetName = renames.get(connection.node)!;
               connection.node = newTargetName;
-              logger.debug(`Updated connection: ${sourceName}[${outputType}][${outputIndex}][${connIndex}].node: "${connection.node}" → "${newTargetName}"`);
+              logger.debug(`Updated connection: ${sourceName}[${outputType}][${outputIndex}][${connIndex}].node: "${oldTargetName}" → "${newTargetName}"`);
             }
           }
         }
@@ -1115,12 +1440,16 @@ export class WorkflowDiffEngine {
    * @returns Normalized node name for safe comparison
    */
   private normalizeNodeName(name: string): string {
+    // Single-pass unescape so sequential replacements can't feed into each
+    // other. Previously we did three separate `.replace()` calls — but
+    // `\\` → `\` first could produce a backslash that the next pass
+    // (`\'` → `'`) treated as an escape sequence, silently dropping a
+    // backslash in inputs like `\\\\'` (correct normalization: `\\'`,
+    // buggy sequential result: `\'`). Addresses CodeQL js/double-escaping.
     return name
-      .trim()                    // Remove leading/trailing whitespace
-      .replace(/\\\\/g, '\\')    // FIRST: Unescape backslashes: \\ -> \ (must be first to handle multiply-escaped chars)
-      .replace(/\\'/g, "'")      // THEN: Unescape single quotes: \' -> '
-      .replace(/\\"/g, '"')      // THEN: Unescape double quotes: \" -> "
-      .replace(/\s+/g, ' ');     // FINALLY: Normalize all whitespace (spaces, tabs, newlines) to single space
+      .trim()
+      .replace(/\\([\\'"])/g, '$1')
+      .replace(/\s+/g, ' ');
   }
 
   /**
@@ -1181,18 +1510,52 @@ export class WorkflowDiffEngine {
     return `Node not found for ${operationType}: "${nodeIdentifier}". Available nodes: ${availableNodes}. Tip: Use node ID for names with special characters (apostrophes, quotes).`;
   }
 
+  private getNestedProperty(obj: any, path: string): any {
+    const keys = path.split('.');
+    let current = obj;
+    for (const key of keys) {
+      if (DANGEROUS_PATH_KEYS.has(key)) return undefined;
+      if (current == null || typeof current !== 'object') return undefined;
+      current = current[key];
+    }
+    return current;
+  }
+
   private setNestedProperty(obj: any, path: string, value: any): void {
     const keys = path.split('.');
     let current = obj;
-    
+
+    // Prototype pollution protection (eager: throw before any write).
+    if (keys.some(k => DANGEROUS_PATH_KEYS.has(k))) {
+      throw new Error(`Invalid property path: "${path}" contains a forbidden key`);
+    }
+
     for (let i = 0; i < keys.length - 1; i++) {
       const key = keys[i];
-      if (!(key in current) || typeof current[key] !== 'object') {
+      // Per-iteration guard. Redundant with the eager check above (which
+      // already throws), but kept so CodeQL's `js/prototype-pollution-utility`
+      // dataflow sees the write site is guarded at the point of assignment.
+      if (DANGEROUS_PATH_KEYS.has(key)) {
+        throw new Error(`Invalid property path: "${path}" contains a forbidden key`);
+      }
+      if (!Object.prototype.hasOwnProperty.call(current, key)
+          || typeof current[key] !== 'object'
+          || current[key] === null) {
+        if (value === null) return; // parent path doesn't exist, nothing to delete
         current[key] = {};
       }
       current = current[key];
     }
-    
-    current[keys[keys.length - 1]] = value;
+
+    const finalKey = keys[keys.length - 1];
+    // Same CodeQL-visible guard at the final write site.
+    if (DANGEROUS_PATH_KEYS.has(finalKey)) {
+      throw new Error(`Invalid property path: "${path}" contains a forbidden key`);
+    }
+    if (value === null) {
+      delete current[finalKey];
+    } else {
+      current[finalKey] = value;
+    }
   }
 }

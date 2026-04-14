@@ -3,12 +3,18 @@ import { Workflow } from '../types/n8n-api';
 export declare class WorkflowDiffEngine {
     private renameMap;
     private warnings;
+    private modifiedNodeIds;
+    private removedNodeNames;
+    private tagsToAdd;
+    private tagsToRemove;
+    private transferToProjectId;
     applyDiff(workflow: Workflow, request: WorkflowDiffRequest): Promise<WorkflowDiffResult>;
     private validateOperation;
     private applyOperation;
     private validateAddNode;
     private validateRemoveNode;
     private validateUpdateNode;
+    private validatePatchNodeField;
     private validateMoveNode;
     private validateToggleNode;
     private validateAddConnection;
@@ -17,6 +23,7 @@ export declare class WorkflowDiffEngine {
     private applyAddNode;
     private applyRemoveNode;
     private applyUpdateNode;
+    private applyPatchNodeField;
     private applyMoveNode;
     private applyEnableNode;
     private applyDisableNode;
@@ -32,6 +39,8 @@ export declare class WorkflowDiffEngine {
     private validateDeactivateWorkflow;
     private applyActivateWorkflow;
     private applyDeactivateWorkflow;
+    private validateTransferWorkflow;
+    private applyTransferWorkflow;
     private validateCleanStaleConnections;
     private validateReplaceConnections;
     private applyCleanStaleConnections;
@@ -40,6 +49,7 @@ export declare class WorkflowDiffEngine {
     private normalizeNodeName;
     private findNode;
     private formatNodeNotFoundError;
+    private getNestedProperty;
     private setNestedProperty;
 }
 //# sourceMappingURL=workflow-diff-engine.d.ts.map

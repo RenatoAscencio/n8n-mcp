@@ -130,14 +130,9 @@ async function rebuild() {
         }
     }
     console.log(`💾 Save completed: ${saved} nodes saved successfully`);
-    try {
-        const { registerChatwootNodes } = await Promise.resolve().then(() => __importStar(require('../integrations/chatwoot/chatwoot-node-catalog')));
-        const chatwootCount = registerChatwootNodes(repository);
-        console.log(`\n🟣 Registered ${chatwootCount} Chatwoot community nodes`);
-    }
-    catch (error) {
-        console.warn('⚠️  Could not register Chatwoot nodes:', error.message);
-    }
+    console.log('\n🔍 Rebuilding FTS5 search index...');
+    db.prepare("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')").run();
+    console.log('✅ FTS5 index rebuilt successfully');
     console.log('\n🔍 Running validation checks...');
     try {
         const validationResults = validateDatabase(repository);

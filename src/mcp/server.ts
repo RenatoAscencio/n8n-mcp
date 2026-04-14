@@ -7,7 +7,7 @@ import {
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { existsSync, promises as fs } from 'fs';
+import { existsSync, readFileSync, promises as fs } from 'fs';
 import path from 'path';
 import { n8nDocumentationToolsFinal } from './tools';
 import { UIAppRegistry } from './ui';
@@ -43,9 +43,23 @@ import {
   STANDARD_PROTOCOL_VERSION
 } from '../utils/protocol-version';
 import { InstanceContext } from '../types/instance-context';
+import { GenerateWorkflowHandler, GenerateWorkflowHelpers } from '../types/generate-workflow';
 import { telemetry } from '../telemetry';
 import { EarlyErrorLogger } from '../telemetry/early-error-logger';
 import { STARTUP_CHECKPOINTS } from '../telemetry/startup-checkpoints';
+
+/**
+ * Escape a string for safe use as a literal inside `new RegExp(...)`.
+ *
+ * Addresses CodeQL js/regex-injection: search queries are user-controlled,
+ * and passing them directly into `new RegExp` lets a crafted query either
+ * alter matching semantics (e.g. `.*`) or trigger polynomial/exponential
+ * backtracking. We only ever want literal substring matching with word
+ * boundaries, so escaping all regex metacharacters is the right fix.
+ */
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 interface NodeRow {
   node_type: string;
@@ -143,6 +157,10 @@ interface VersionComparisonInfo {
 
 type NodeInfoResponse = NodeMinimalInfo | NodeStandardInfo | NodeFullInfo | VersionHistoryInfo | VersionComparisonInfo;
 
+interface MCPServerOptions {
+  generateWorkflowHandler?: GenerateWorkflowHandler;
+}
+
 export class N8NDocumentationMCPServer {
   private server: Server;
   private db: DatabaseAdapter | null = null;
@@ -159,10 +177,12 @@ export class N8NDocumentationMCPServer {
   private useSharedDatabase: boolean = false;  // Track if using shared DB for cleanup
   private sharedDbState: SharedDatabaseState | null = null;  // Reference to shared DB state for release
   private isShutdown: boolean = false;  // Prevent double-shutdown
+  private generateWorkflowHandler?: GenerateWorkflowHandler;
 
-  constructor(instanceContext?: InstanceContext, earlyLogger?: EarlyErrorLogger) {
+  constructor(instanceContext?: InstanceContext, earlyLogger?: EarlyErrorLogger, options?: MCPServerOptions) {
     this.instanceContext = instanceContext;
     this.earlyLogger = earlyLogger || null;
+    this.generateWorkflowHandler = options?.generateWorkflowHandler;
     // Check for test environment first
     const envDbPath = process.env.NODE_DB_PATH;
     let dbPath: string | null = null;
@@ -211,6 +231,13 @@ export class N8NDocumentationMCPServer {
         this.earlyLogger.logCheckpoint(STARTUP_CHECKPOINTS.N8N_API_READY);
       }
     });
+
+    // Attach a no-op catch handler to prevent Node.js from flagging this as an
+    // unhandled rejection in the interval between construction and the first
+    // await of this.initialized (via ensureInitialized). This does NOT suppress
+    // the error: the original this.initialized promise still rejects, and
+    // ensureInitialized() will re-throw it when awaited.
+    this.initialized.catch(() => {});
 
     logger.info('Initializing n8n Documentation MCP server');
     
@@ -712,9 +739,23 @@ export class N8NDocumentationMCPServer {
         };
       }
 
+      // Safeguard: if the entire args object arrives as a JSON string, parse it.
+      // Some MCP clients may serialize the arguments object itself.
+      let processedArgs: Record<string, any> | undefined = args;
+      if (typeof args === 'string') {
+        try {
+          const parsed = JSON.parse(args as unknown as string);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            processedArgs = parsed;
+            logger.warn(`Coerced stringified args object for tool "${name}"`);
+          }
+        } catch {
+          logger.warn(`Tool "${name}" received string args that are not valid JSON`);
+        }
+      }
+
       // Workaround for n8n's nested output bug
       // Check if args contains nested 'output' structure from n8n's memory corruption
-      let processedArgs = args;
       if (args && typeof args === 'object' && 'output' in args) {
         try {
           const possibleNestedData = args.output;
@@ -746,10 +787,18 @@ export class N8NDocumentationMCPServer {
         }
       }
 
-      // Workaround for Claude Desktop 1.1.3189 string serialization bug.
-      // The MCP client serializes object/array parameters as JSON strings.
-      // Use the tool's inputSchema to detect and parse them back.
+      // Workaround for Claude Desktop / Claude.ai MCP client bugs that
+      // serialize parameters with wrong types. Coerces ALL mismatched types
+      // (string↔object, string↔number, string↔boolean, etc.) using the
+      // tool's inputSchema as the source of truth.
       processedArgs = this.coerceStringifiedJsonParams(name, processedArgs);
+
+      // Strip undefined values from args (#611) — VS Code extension sends
+      // explicit undefined values which Zod's .optional() rejects.
+      // Removing them makes Zod treat them as missing (which .optional() allows).
+      if (processedArgs) {
+        processedArgs = JSON.parse(JSON.stringify(processedArgs));
+      }
 
       try {
         logger.debug(`Executing tool: ${name}`, { args: processedArgs });
@@ -838,7 +887,7 @@ export class N8NDocumentationMCPServer {
 
         // Provide more helpful error messages for common n8n issues
         let helpfulMessage = `Error executing tool ${name}: ${errorMessage}`;
-        
+
         if (errorMessage.includes('required') || errorMessage.includes('missing')) {
           helpfulMessage += '\n\nNote: This error often occurs when the AI agent sends incomplete or incorrectly formatted parameters. Please ensure all required fields are provided with the correct types.';
         } else if (errorMessage.includes('type') || errorMessage.includes('expected')) {
@@ -846,12 +895,20 @@ export class N8NDocumentationMCPServer {
         } else if (errorMessage.includes('Unknown category') || errorMessage.includes('not found')) {
           helpfulMessage += '\n\nNote: The requested resource or category was not found. Please check the available options.';
         }
-        
+
         // For n8n schema errors, add specific guidance
         if (name.startsWith('validate_') && (errorMessage.includes('config') || errorMessage.includes('nodeType'))) {
           helpfulMessage += '\n\nFor validation tools:\n- nodeType should be a string (e.g., "nodes-base.webhook")\n- config should be an object (e.g., {})';
         }
-        
+
+        // Include diagnostic info about received args to help debug client issues
+        try {
+          const argDiag = processedArgs && typeof processedArgs === 'object'
+            ? Object.entries(processedArgs).map(([k, v]) => `${k}: ${typeof v}`).join(', ')
+            : `args type: ${typeof processedArgs}`;
+          helpfulMessage += `\n\n[Diagnostic] Received arg types: {${argDiag}}`;
+        } catch { /* ignore diagnostic errors */ }
+
         return {
           content: [
             {
@@ -1024,6 +1081,20 @@ export class N8NDocumentationMCPServer {
           ? { valid: true, errors: [] }
           : { valid: false, errors: [{ field: 'action', message: 'action is required' }] };
         break;
+      case 'n8n_manage_datatable':
+        validationResult = args.action
+          ? { valid: true, errors: [] }
+          : { valid: false, errors: [{ field: 'action', message: 'action is required' }] };
+        break;
+      case 'n8n_manage_credentials':
+        validationResult = args.action
+          ? { valid: true, errors: [] }
+          : { valid: false, errors: [{ field: 'action', message: 'action is required' }] };
+        break;
+      case 'n8n_audit_instance':
+        // No required parameters - all are optional
+        validationResult = { valid: true, errors: [] };
+        break;
       case 'n8n_deploy_template':
         // Requires templateId parameter
         validationResult = args.templateId !== undefined
@@ -1156,9 +1227,15 @@ export class N8NDocumentationMCPServer {
   }
 
   /**
-   * Coerce stringified JSON parameters back to objects/arrays.
-   * Workaround for Claude Desktop 1.1.3189 which serializes object/array
-   * params as JSON strings before sending them to MCP servers.
+   * Coerce mistyped parameters back to their expected types.
+   * Workaround for Claude Desktop / Claude.ai MCP client bugs that serialize
+   * parameters incorrectly (objects as strings, numbers as strings, etc.).
+   *
+   * Handles ALL type mismatches based on the tool's inputSchema:
+   *   string→object, string→array   : JSON.parse
+   *   string→number, string→integer : Number()
+   *   string→boolean                : "true"/"false" parsing
+   *   number→string, boolean→string : .toString()
    */
   private coerceStringifiedJsonParams(
     toolName: string,
@@ -1172,28 +1249,81 @@ export class N8NDocumentationMCPServer {
 
     const properties = tool.inputSchema.properties;
     const coerced = { ...args };
+    let coercedAny = false;
 
     for (const [key, value] of Object.entries(coerced)) {
-      if (typeof value !== 'string') continue;
-      const expectedType = (properties as any)[key]?.type;
-      if (expectedType !== 'object' && expectedType !== 'array') continue;
+      if (value === undefined || value === null) continue;
 
-      const trimmed = value.trim();
-      const validPrefix = (expectedType === 'object' && trimmed.startsWith('{'))
-                       || (expectedType === 'array'  && trimmed.startsWith('['));
-      if (!validPrefix) continue;
+      const propSchema = (properties as any)[key];
+      if (!propSchema) continue;
+      const expectedType = propSchema.type;
+      if (!expectedType) continue;
 
-      try {
-        const parsed = JSON.parse(trimmed);
-        const isArray = Array.isArray(parsed);
-        if ((expectedType === 'object' && typeof parsed === 'object' && !isArray)
-         || (expectedType === 'array'  && isArray)) {
-          coerced[key] = parsed;
-          logger.warn(`Coerced stringified ${expectedType} param "${key}" for tool "${toolName}"`);
+      const actualType = typeof value;
+
+      // Already correct type — skip
+      if (expectedType === 'string' && actualType === 'string') continue;
+      if ((expectedType === 'number' || expectedType === 'integer') && actualType === 'number') continue;
+      if (expectedType === 'boolean' && actualType === 'boolean') continue;
+      if (expectedType === 'object' && actualType === 'object' && !Array.isArray(value)) continue;
+      if (expectedType === 'array' && Array.isArray(value)) continue;
+
+      // --- Coercion: string value → expected type ---
+      if (actualType === 'string') {
+        const trimmed = (value as string).trim();
+
+        if (expectedType === 'object' && trimmed.startsWith('{')) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+              coerced[key] = parsed;
+              coercedAny = true;
+            }
+          } catch { /* keep original */ }
+          continue;
         }
-      } catch {
-        // Not valid JSON — keep original string, downstream validation will report the error
+
+        if (expectedType === 'array' && trimmed.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+              coerced[key] = parsed;
+              coercedAny = true;
+            }
+          } catch { /* keep original */ }
+          continue;
+        }
+
+        if (expectedType === 'number' || expectedType === 'integer') {
+          const num = Number(trimmed);
+          if (!isNaN(num) && trimmed !== '') {
+            coerced[key] = expectedType === 'integer' ? Math.trunc(num) : num;
+            coercedAny = true;
+          }
+          continue;
+        }
+
+        if (expectedType === 'boolean') {
+          if (trimmed === 'true') { coerced[key] = true; coercedAny = true; }
+          else if (trimmed === 'false') { coerced[key] = false; coercedAny = true; }
+          continue;
+        }
       }
+
+      // --- Coercion: number/boolean value → expected string ---
+      if (expectedType === 'string' && (actualType === 'number' || actualType === 'boolean')) {
+        coerced[key] = String(value);
+        coercedAny = true;
+        continue;
+      }
+    }
+
+    if (coercedAny) {
+      logger.warn(`Coerced mistyped params for tool "${toolName}"`, {
+        original: Object.fromEntries(
+          Object.entries(args).map(([k, v]) => [k, `${typeof v}: ${typeof v === 'string' ? v.substring(0, 80) : v}`])
+        ),
+      });
     }
 
     return coerced;
@@ -1234,6 +1364,7 @@ export class N8NDocumentationMCPServer {
         return this.searchNodes(args.query, limit, {
           mode: args.mode,
           includeExamples: args.includeExamples,
+          includeOperations: args.includeOperations,
           source: args.source
         });
       case 'get_node':
@@ -1338,6 +1469,8 @@ export class N8NDocumentationMCPServer {
               requiredService: args.requiredService,
               targetAudience: args.targetAudience
             }, searchLimit, searchOffset);
+          case 'patterns':
+            return this.getWorkflowPatterns(args.task as string | undefined, searchLimit);
           case 'keyword':
           default:
             if (!args.query) {
@@ -1431,6 +1564,92 @@ export class N8NDocumentationMCPServer {
         if (!this.templateService) throw new Error('Template service not initialized');
         if (!this.repository) throw new Error('Repository not initialized');
         return n8nHandlers.handleDeployTemplate(args, this.templateService, this.repository, this.instanceContext);
+
+      case 'n8n_manage_datatable': {
+        this.validateToolParams(name, args, ['action']);
+        const dtAction = args.action;
+        // Each handler validates its own inputs via Zod schemas
+        switch (dtAction) {
+          case 'createTable':  return n8nHandlers.handleCreateTable(args, this.instanceContext);
+          case 'listTables':   return n8nHandlers.handleListTables(args, this.instanceContext);
+          case 'getTable':     return n8nHandlers.handleGetTable(args, this.instanceContext);
+          case 'updateTable':  return n8nHandlers.handleUpdateTable(args, this.instanceContext);
+          case 'deleteTable':  return n8nHandlers.handleDeleteTable(args, this.instanceContext);
+          case 'getRows':      return n8nHandlers.handleGetRows(args, this.instanceContext);
+          case 'insertRows':   return n8nHandlers.handleInsertRows(args, this.instanceContext);
+          case 'updateRows':   return n8nHandlers.handleUpdateRows(args, this.instanceContext);
+          case 'upsertRows':   return n8nHandlers.handleUpsertRows(args, this.instanceContext);
+          case 'deleteRows':   return n8nHandlers.handleDeleteRows(args, this.instanceContext);
+          default:
+            throw new Error(`Unknown action: ${dtAction}. Valid actions: createTable, listTables, getTable, updateTable, deleteTable, getRows, insertRows, updateRows, upsertRows, deleteRows`);
+        }
+      }
+
+      case 'n8n_manage_credentials': {
+        this.validateToolParams(name, args, ['action']);
+        const credAction = args.action;
+        switch (credAction) {
+          case 'list':      return n8nHandlers.handleListCredentials(args, this.instanceContext);
+          case 'get':       return n8nHandlers.handleGetCredential(args, this.instanceContext);
+          case 'create':    return n8nHandlers.handleCreateCredential(args, this.instanceContext);
+          case 'update':    return n8nHandlers.handleUpdateCredential(args, this.instanceContext);
+          case 'delete':    return n8nHandlers.handleDeleteCredential(args, this.instanceContext);
+          case 'getSchema': return n8nHandlers.handleGetCredentialSchema(args, this.instanceContext);
+          default:
+            throw new Error(`Unknown action: ${credAction}. Valid actions: list, get, create, update, delete, getSchema`);
+        }
+      }
+
+      case 'n8n_audit_instance':
+        // No required parameters - all are optional
+        return n8nHandlers.handleAuditInstance(args, this.instanceContext);
+
+      case 'n8n_generate_workflow': {
+        this.validateToolParams(name, args, ['description']);
+
+        if (this.generateWorkflowHandler && this.instanceContext) {
+          await this.ensureInitialized();
+          if (!this.repository) {
+            throw new Error('Repository not initialized');
+          }
+
+          const repo = this.repository;
+          const ctx = this.instanceContext;
+          const helpers: GenerateWorkflowHelpers = {
+            createWorkflow: (wfArgs) =>
+              n8nHandlers.handleCreateWorkflow(wfArgs, ctx),
+            validateWorkflow: (id) =>
+              n8nHandlers.handleValidateWorkflow({ id }, repo, ctx),
+            autofixWorkflow: (id) =>
+              n8nHandlers.handleAutofixWorkflow({ id }, repo, ctx),
+            getWorkflow: (id) =>
+              n8nHandlers.handleGetWorkflow({ id }, ctx),
+          };
+
+          try {
+            const result = await this.generateWorkflowHandler(args, ctx, helpers);
+            return result ?? { success: false, error: 'Handler returned no result' };
+          } catch (err: any) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { success: false, error: message };
+          }
+        }
+
+        // No handler and/or no instanceContext — self-hosted deployment
+        return {
+          hosted_only: true,
+          message: 'The n8n_generate_workflow tool is available exclusively on the hosted version of n8n-mcp. ' +
+            'It uses AI to generate complete, validated n8n workflows from natural language descriptions.\n\n' +
+            'To access this feature:\n' +
+            '1. Register for free at https://dashboard.n8n-mcp.com\n' +
+            '2. Connect your n8n instance\n' +
+            '3. Use your hosted API key in your MCP client\n\n' +
+            'The hosted service includes:\n' +
+            '- 73,000+ pre-built workflow templates with instant deployment\n' +
+            '- AI-powered fresh generation for custom workflows\n' +
+            '- Automatic validation and error correction'
+        };
+      }
 
       // Chatwoot Integration Tools
       case 'chatwoot_doctor':
@@ -1589,6 +1808,7 @@ export class N8NDocumentationMCPServer {
       mode?: 'OR' | 'AND' | 'FUZZY';
       includeSource?: boolean;
       includeExamples?: boolean;
+      includeOperations?: boolean;
       source?: 'all' | 'core' | 'community' | 'verified';
     }
   ): Promise<any> {
@@ -1631,6 +1851,7 @@ export class N8NDocumentationMCPServer {
     options?: {
       includeSource?: boolean;
       includeExamples?: boolean;
+      includeOperations?: boolean;
       source?: 'all' | 'core' | 'community' | 'verified';
     }
   ): Promise<any> {
@@ -1644,7 +1865,7 @@ export class N8NDocumentationMCPServer {
     
     // For FUZZY mode, use LIKE search with typo patterns
     if (mode === 'FUZZY') {
-      return this.searchNodesFuzzy(cleanedQuery, limit);
+      return this.searchNodesFuzzy(cleanedQuery, limit, { includeOperations: options?.includeOperations });
     }
     
     let ftsQuery: string;
@@ -1735,7 +1956,7 @@ export class N8NDocumentationMCPServer {
       if (cleanedQuery.toLowerCase().includes('http') && !hasHttpRequest) {
         // FTS missed HTTP Request, fall back to LIKE search
         logger.debug('FTS missed HTTP Request node, augmenting with LIKE search');
-        return this.searchNodesLIKE(query, limit);
+        return this.searchNodesLIKE(query, limit, options);
       }
       
       const result: any = {
@@ -1760,6 +1981,14 @@ export class N8NDocumentationMCPServer {
             }
             if ((node as any).npm_downloads) {
               nodeResult.npmDownloads = (node as any).npm_downloads;
+            }
+          }
+
+          // Add operations tree if requested
+          if (options?.includeOperations) {
+            const opsTree = this.buildOperationsTree(node.operations);
+            if (opsTree) {
+              nodeResult.operationsTree = opsTree;
             }
           }
 
@@ -1830,7 +2059,13 @@ export class N8NDocumentationMCPServer {
     }
   }
   
-  private async searchNodesFuzzy(query: string, limit: number): Promise<any> {
+  private async searchNodesFuzzy(
+    query: string,
+    limit: number,
+    options?: {
+      includeOperations?: boolean;
+    }
+  ): Promise<any> {
     if (!this.db) throw new Error('Database not initialized');
     
     // Split into words for fuzzy matching
@@ -1871,14 +2106,26 @@ export class N8NDocumentationMCPServer {
     return {
       query,
       mode: 'FUZZY',
-      results: matchingNodes.map(node => ({
-        nodeType: node.node_type,
-        workflowNodeType: getWorkflowNodeType(node.package_name, node.node_type),
-        displayName: node.display_name,
-        description: node.description,
-        category: node.category,
-        package: node.package_name
-      })),
+      results: matchingNodes.map(node => {
+        const nodeResult: any = {
+          nodeType: node.node_type,
+          workflowNodeType: getWorkflowNodeType(node.package_name, node.node_type),
+          displayName: node.display_name,
+          description: node.description,
+          category: node.category,
+          package: node.package_name
+        };
+
+        // Add operations tree if requested
+        if (options?.includeOperations) {
+          const opsTree = this.buildOperationsTree(node.operations);
+          if (opsTree) {
+            nodeResult.operationsTree = opsTree;
+          }
+        }
+
+        return nodeResult;
+      }),
       totalCount: matchingNodes.length
     };
   }
@@ -1983,6 +2230,7 @@ export class N8NDocumentationMCPServer {
     options?: {
       includeSource?: boolean;
       includeExamples?: boolean;
+      includeOperations?: boolean;
       source?: 'all' | 'core' | 'community' | 'verified';
     }
   ): Promise<any> {
@@ -2039,6 +2287,14 @@ export class N8NDocumentationMCPServer {
             }
             if ((node as any).npm_downloads) {
               nodeResult.npmDownloads = (node as any).npm_downloads;
+            }
+          }
+
+          // Add operations tree if requested
+          if (options?.includeOperations) {
+            const opsTree = this.buildOperationsTree(node.operations);
+            if (opsTree) {
+              nodeResult.operationsTree = opsTree;
             }
           }
 
@@ -2128,6 +2384,14 @@ export class N8NDocumentationMCPServer {
           }
         }
 
+        // Add operations tree if requested
+        if (options?.includeOperations) {
+          const opsTree = this.buildOperationsTree(node.operations);
+          if (opsTree) {
+            nodeResult.operationsTree = opsTree;
+          }
+        }
+
         return nodeResult;
       }),
       totalCount: rankedNodes.length
@@ -2211,7 +2475,7 @@ export class N8NDocumentationMCPServer {
       score = 800;
     }
     // Word boundary match in display name
-    else if (new RegExp(`\\b${query_lower}\\b`, 'i').test(node.display_name)) {
+    else if (new RegExp(`\\b${escapeRegExp(query_lower)}\\b`, 'i').test(node.display_name)) {
       score = 700;
     }
     // Contains in display name
@@ -2269,7 +2533,7 @@ export class N8NDocumentationMCPServer {
         score = 800;
       }
       // Word boundary match in display name
-      else if (new RegExp(`\\b${query_lower}\\b`, 'i').test(node.display_name)) {
+      else if (new RegExp(`\\b${escapeRegExp(query_lower)}\\b`, 'i').test(node.display_name)) {
         score = 700;
       }
       // Contains in display name
@@ -2496,6 +2760,51 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
         nodeCount: pkg.count,
       })),
     };
+  }
+
+  /**
+   * Parse raw operations data and group by resource into a compact tree.
+   * Returns undefined when there are no operations (e.g. trigger nodes, Code node).
+   */
+  private buildOperationsTree(operationsRaw: string | any[] | null | undefined): Array<{resource: string, operations: string[]}> | undefined {
+    if (!operationsRaw) return undefined;
+
+    let ops: any[];
+    if (typeof operationsRaw === 'string') {
+      try {
+        ops = JSON.parse(operationsRaw);
+      } catch {
+        return undefined;
+      }
+    } else if (Array.isArray(operationsRaw)) {
+      ops = operationsRaw;
+    } else {
+      return undefined;
+    }
+
+    if (!Array.isArray(ops) || ops.length === 0) return undefined;
+
+    // Group by resource
+    const byResource = new Map<string, string[]>();
+    for (const op of ops) {
+      const resource = op.resource || 'default';
+      const opName = op.name || op.operation;
+      if (!opName) continue;
+      if (!byResource.has(resource)) {
+        byResource.set(resource, []);
+      }
+      const list = byResource.get(resource)!;
+      if (!list.includes(opName)) {
+        list.push(opName);
+      }
+    }
+
+    if (byResource.size === 0) return undefined;
+
+    return Array.from(byResource.entries()).map(([resource, operations]) => ({
+      resource,
+      operations
+    }));
   }
 
   private async getNodeEssentials(nodeType: string, includeExamples?: boolean): Promise<any> {
@@ -3695,6 +4004,71 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
     };
   }
   
+  private workflowPatternsCache: {
+    generatedAt: string;
+    templateCount: number;
+    categories: Record<string, {
+      templateCount: number;
+      pattern: string;
+      nodes?: Array<{ type: string; frequency: number; role: string; displayName: string }>;
+      commonChains?: Array<{ chain: string[]; count: number; frequency: number }>;
+    }>;
+  } | null = null;
+
+  private getWorkflowPatterns(category?: string, limit: number = 10): any {
+    // Load patterns file (cached after first load)
+    if (!this.workflowPatternsCache) {
+      try {
+        const patternsPath = path.join(__dirname, '..', '..', 'data', 'workflow-patterns.json');
+        if (existsSync(patternsPath)) {
+          this.workflowPatternsCache = JSON.parse(readFileSync(patternsPath, 'utf-8'));
+        } else {
+          return { error: 'Workflow patterns not generated yet. Run: npm run mine:patterns' };
+        }
+      } catch (e) {
+        return { error: `Failed to load workflow patterns: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
+    const patterns = this.workflowPatternsCache!;
+
+    if (category) {
+      // Return specific category pattern data (trimmed for token efficiency)
+      const categoryData = patterns.categories[category];
+      if (!categoryData) {
+        const available = Object.keys(patterns.categories);
+        return { error: `Unknown category "${category}". Available: ${available.join(', ')}` };
+      }
+      const MAX_CHAINS = 5;
+      return {
+        category,
+        templateCount: categoryData.templateCount,
+        pattern: categoryData.pattern,
+        nodes: categoryData.nodes?.slice(0, limit).map(n => ({
+          type: n.type, freq: n.frequency, role: n.role
+        })),
+        chains: categoryData.commonChains?.slice(0, MAX_CHAINS).map(c => ({
+          path: c.chain.map(t => t.split('.').pop() ?? t), count: c.count, freq: c.frequency
+        })),
+      };
+    }
+
+    // Return overview of all categories
+    const overview = Object.entries(patterns.categories).map(([name, data]) => ({
+      category: name,
+      templateCount: data.templateCount,
+      pattern: data.pattern,
+      topNodes: data.nodes?.slice(0, 5).map(n => n.displayName || n.type),
+    }));
+
+    return {
+      templateCount: patterns.templateCount,
+      generatedAt: patterns.generatedAt,
+      categories: overview,
+      tip: 'Use search_templates({searchMode: "patterns", task: "category_name"}) for full pattern data with nodes, chains, and tips.',
+    };
+  }
+
   private async getTemplatesForTask(task: string, limit: number = 10, offset: number = 0): Promise<any> {
     await this.ensureInitialized();
     if (!this.templateService) throw new Error('Template service not initialized');

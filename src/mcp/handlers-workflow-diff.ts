@@ -4,10 +4,11 @@
  */
 
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import { McpToolResponse } from '../types/n8n-api';
-import { WorkflowDiffRequest, WorkflowDiffOperation } from '../types/workflow-diff';
+import { WorkflowDiffRequest, WorkflowDiffOperation, WorkflowDiffValidationError } from '../types/workflow-diff';
 import { WorkflowDiffEngine } from '../services/workflow-diff-engine';
-import { getN8nApiClient } from './handlers-n8n-manager';
+import { getN8nApiClient, tryParseJson } from './handlers-n8n-manager';
 import { N8nApiError, getUserFriendlyErrorMessage } from '../utils/n8n-errors';
 import { logger } from '../utils/logger';
 import { InstanceContext } from '../types/instance-context';
@@ -31,10 +32,15 @@ function getValidator(repository: NodeRepository): WorkflowValidator {
   return cachedValidator;
 }
 
+// Operation types that identify nodes by nodeId/nodeName
+const NODE_TARGETING_OPERATIONS = new Set([
+  'updateNode', 'removeNode', 'moveNode', 'enableNode', 'disableNode', 'patchNodeField'
+]);
+
 // Zod schema for the diff request
 const workflowDiffSchema = z.object({
   id: z.string(),
-  operations: z.array(z.object({
+  operations: z.preprocess(tryParseJson, z.array(z.object({
     type: z.string(),
     description: z.string().optional(),
     // Node operations
@@ -42,14 +48,16 @@ const workflowDiffSchema = z.object({
     nodeId: z.string().optional(),
     nodeName: z.string().optional(),
     updates: z.any().optional(),
+    fieldPath: z.string().optional(),
+    patches: z.any().optional(),
     position: z.tuple([z.number(), z.number()]).optional(),
     // Connection operations
     source: z.string().optional(),
     target: z.string().optional(),
     from: z.string().optional(),  // For rewireConnection
     to: z.string().optional(),    // For rewireConnection
-    sourceOutput: z.string().optional(),
-    targetInput: z.string().optional(),
+    sourceOutput: z.union([z.string(), z.number()]).transform(String).optional(),
+    targetInput: z.union([z.string(), z.number()]).transform(String).optional(),
     sourceIndex: z.number().optional(),
     targetIndex: z.number().optional(),
     // Smart parameters (Phase 1 UX improvement)
@@ -63,7 +71,26 @@ const workflowDiffSchema = z.object({
     settings: z.any().optional(),
     name: z.string().optional(),
     tag: z.string().optional(),
-  })),
+    // Transfer operation
+    destinationProjectId: z.string().min(1).optional(),
+    // Aliases: LLMs often use "id" instead of "nodeId" — accept both
+    id: z.string().optional(),
+  }).transform((op) => {
+    // Normalize common field aliases for node-targeting operations:
+    // - "name" → "nodeName" (LLMs confuse the updateName "name" field with node identification)
+    // - "id" → "nodeId" (natural alias)
+    if (NODE_TARGETING_OPERATIONS.has(op.type)) {
+      if (!op.nodeName && !op.nodeId && op.name) {
+        op.nodeName = op.name;
+        op.name = undefined;
+      }
+      if (!op.nodeId && op.id) {
+        op.nodeId = op.id;
+        op.id = undefined;
+      }
+    }
+    return op;
+  }))),
   validateOnly: z.boolean().optional(),
   continueOnError: z.boolean().optional(),
   createBackup: z.boolean().optional(),
@@ -76,7 +103,10 @@ export async function handleUpdatePartialWorkflow(
   context?: InstanceContext
 ): Promise<McpToolResponse> {
   const startTime = Date.now();
-  const sessionId = `mutation_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+  // Correlation ID for telemetry. Use a CSPRNG (crypto.randomUUID) rather
+  // than Math.random so two concurrent mutations can't collide on a
+  // predictable suffix — addresses CodeQL js/insecure-randomness.
+  const sessionId = `mutation_${Date.now()}_${randomUUID()}`;
   let workflowBefore: any = null;
   let validationBefore: any = null;
   let validationAfter: any = null;
@@ -178,11 +208,12 @@ export async function handleUpdatePartialWorkflow(
         // Complete failure - return error
         return {
           success: false,
+          saved: false,
           error: 'Failed to apply diff operations',
+          operationsApplied: diffResult.operationsApplied,
           details: {
             errors: diffResult.errors,
             warnings: diffResult.warnings,
-            operationsApplied: diffResult.operationsApplied,
             applied: diffResult.applied,
             failed: diffResult.failed
           }
@@ -234,9 +265,9 @@ export async function handleUpdatePartialWorkflow(
         // Build recovery guidance based on error types
         const recoverySteps = [];
         if (errorTypes.has('operator_issues')) {
-          recoverySteps.push('Operator structure issue detected. Use validate_node_operation to check specific nodes.');
+          recoverySteps.push('Operator structure issue detected. Use validate_node to check specific nodes.');
           recoverySteps.push('Binary operators (equals, contains, greaterThan, etc.) must NOT have singleValue:true');
-          recoverySteps.push('Unary operators (isEmpty, isNotEmpty, true, false) REQUIRE singleValue:true');
+          recoverySteps.push('Unary operators (empty, notEmpty, true, false) REQUIRE singleValue:true');
         }
         if (errorTypes.has('connection_issues')) {
           recoverySteps.push('Connection validation failed. Check all node connections reference existing nodes.');
@@ -265,6 +296,7 @@ export async function handleUpdatePartialWorkflow(
         if (!skipValidation) {
           return {
             success: false,
+            saved: false,
             error: errorMessage,
             details: {
               errors: structureErrors,
@@ -273,7 +305,7 @@ export async function handleUpdatePartialWorkflow(
               applied: diffResult.applied,
               recoveryGuidance: recoverySteps,
               note: 'Operations were applied but created an invalid workflow structure. The workflow was NOT saved to n8n to prevent UI rendering errors.',
-              autoSanitizationNote: 'Auto-sanitization runs on all nodes during updates to fix operator structures and add missing metadata. However, it cannot fix all issues (e.g., broken connections, branch mismatches). Use the recovery guidance above to resolve remaining issues.'
+              autoSanitizationNote: 'Auto-sanitization runs on modified nodes during updates to fix operator structures and add missing metadata. However, it cannot fix all issues (e.g., broken connections, branch mismatches). Use the recovery guidance above to resolve remaining issues.'
             }
           };
         }
@@ -288,6 +320,83 @@ export async function handleUpdatePartialWorkflow(
     // Update workflow via API
     try {
       const updatedWorkflow = await client.updateWorkflow(input.id, diffResult.workflow!);
+
+      // Handle tag operations via dedicated API (#599)
+      let tagWarnings: string[] = [];
+      if (diffResult.tagsToAdd?.length || diffResult.tagsToRemove?.length) {
+        try {
+          // Get existing tags from the updated workflow
+          const existingTags: Array<{ id: string; name: string }> = Array.isArray(updatedWorkflow.tags)
+            ? updatedWorkflow.tags.map((t: any) => typeof t === 'object' ? { id: t.id, name: t.name } : { id: '', name: t })
+            : [];
+
+          // Resolve tag names to IDs
+          const allTags = await client.listTags();
+          const tagMap = new Map<string, string>();
+          for (const t of allTags.data) {
+            if (t.id) tagMap.set(t.name.toLowerCase(), t.id);
+          }
+
+          // Create any tags that don't exist yet
+          for (const tagName of (diffResult.tagsToAdd || [])) {
+            if (!tagMap.has(tagName.toLowerCase())) {
+              try {
+                const newTag = await client.createTag({ name: tagName });
+                if (newTag.id) tagMap.set(tagName.toLowerCase(), newTag.id);
+              } catch (createErr) {
+                tagWarnings.push(`Failed to create tag "${tagName}": ${createErr instanceof Error ? createErr.message : 'Unknown error'}`);
+              }
+            }
+          }
+
+          // Compute final tag set — resolve string-type tags via tagMap
+          const currentTagIds = new Set<string>();
+          for (const et of existingTags) {
+            if (et.id) {
+              currentTagIds.add(et.id);
+            } else {
+              const resolved = tagMap.get(et.name.toLowerCase());
+              if (resolved) currentTagIds.add(resolved);
+            }
+          }
+
+          for (const tagName of (diffResult.tagsToAdd || [])) {
+            const tagId = tagMap.get(tagName.toLowerCase());
+            if (tagId) currentTagIds.add(tagId);
+          }
+
+          for (const tagName of (diffResult.tagsToRemove || [])) {
+            const tagId = tagMap.get(tagName.toLowerCase());
+            if (tagId) currentTagIds.delete(tagId);
+          }
+
+          // Update workflow tags via dedicated API
+          await client.updateWorkflowTags(input.id, Array.from(currentTagIds));
+        } catch (tagError) {
+          tagWarnings.push(`Tag update failed: ${tagError instanceof Error ? tagError.message : 'Unknown error'}`);
+          logger.warn('Tag operations failed (non-blocking)', tagError);
+        }
+      }
+
+      // Handle project transfer if requested (before activation so workflow is in target project first)
+      let transferMessage = '';
+      if (diffResult.transferToProjectId) {
+        try {
+          await client.transferWorkflow(input.id, diffResult.transferToProjectId);
+          transferMessage = ` Workflow transferred to project ${diffResult.transferToProjectId}.`;
+        } catch (transferError) {
+          logger.error('Failed to transfer workflow to project', transferError);
+          return {
+            success: false,
+            saved: true,
+            error: 'Workflow updated successfully but project transfer failed',
+            details: {
+              workflowUpdated: true,
+              transferError: transferError instanceof Error ? transferError.message : 'Unknown error'
+            }
+          };
+        }
+      }
 
       // Handle activation/deactivation if requested
       let finalWorkflow = updatedWorkflow;
@@ -319,6 +428,7 @@ export async function handleUpdatePartialWorkflow(
           logger.error('Failed to activate workflow after update', activationError);
           return {
             success: false,
+            saved: true,
             error: 'Workflow updated successfully but activation failed',
             details: {
               workflowUpdated: true,
@@ -334,6 +444,7 @@ export async function handleUpdatePartialWorkflow(
           logger.error('Failed to deactivate workflow after update', deactivationError);
           return {
             success: false,
+            saved: true,
             error: 'Workflow updated successfully but deactivation failed',
             details: {
               workflowUpdated: true,
@@ -363,6 +474,7 @@ export async function handleUpdatePartialWorkflow(
 
       return {
         success: true,
+        saved: true,
         data: {
           id: finalWorkflow.id,
           name: finalWorkflow.name,
@@ -370,12 +482,12 @@ export async function handleUpdatePartialWorkflow(
           nodeCount: finalWorkflow.nodes?.length || 0,
           operationsApplied: diffResult.operationsApplied
         },
-        message: `Workflow "${finalWorkflow.name}" updated successfully. Applied ${diffResult.operationsApplied} operations.${activationMessage} Use n8n_get_workflow with mode 'structure' to verify current state.`,
+        message: `Workflow "${finalWorkflow.name}" updated successfully. Applied ${diffResult.operationsApplied} operations.${transferMessage}${activationMessage} Use n8n_get_workflow with mode 'structure' to verify current state.`,
         details: {
           applied: diffResult.applied,
           failed: diffResult.failed,
           errors: diffResult.errors,
-          warnings: diffResult.warnings
+          warnings: mergeWarnings(diffResult.warnings, tagWarnings)
         }
       };
     } catch (error) {
@@ -413,7 +525,9 @@ export async function handleUpdatePartialWorkflow(
       return {
         success: false,
         error: 'Invalid input',
-        details: { errors: error.errors }
+        details: {
+          errors: error.errors.map(e => `${e.path.join('.')}: ${e.message}`)
+        }
       };
     }
 
@@ -423,6 +537,21 @@ export async function handleUpdatePartialWorkflow(
       error: error instanceof Error ? error.message : 'Unknown error occurred'
     };
   }
+}
+
+/**
+ * Merge diff engine warnings with tag operation warnings into a single array.
+ * Returns undefined when there are no warnings to keep the response clean.
+ */
+function mergeWarnings(
+  diffWarnings: WorkflowDiffValidationError[] | undefined,
+  tagWarnings: string[]
+): WorkflowDiffValidationError[] | undefined {
+  const merged: WorkflowDiffValidationError[] = [
+    ...(diffWarnings || []),
+    ...tagWarnings.map(w => ({ operation: -1, message: w }))
+  ];
+  return merged.length > 0 ? merged : undefined;
 }
 
 /**
@@ -446,6 +575,8 @@ function inferIntentFromOperations(operations: any[]): string {
         return `Remove node ${op.nodeName || op.nodeId || ''}`.trim();
       case 'updateNode':
         return `Update node ${op.nodeName || op.nodeId || ''}`.trim();
+      case 'patchNodeField':
+        return `Patch field on node ${op.nodeName || op.nodeId || ''}`.trim();
       case 'addConnection':
         return `Connect ${op.source || 'node'} to ${op.target || 'node'}`;
       case 'removeConnection':
@@ -458,6 +589,8 @@ function inferIntentFromOperations(operations: any[]): string {
         return 'Activate workflow';
       case 'deactivateWorkflow':
         return 'Deactivate workflow';
+      case 'transferWorkflow':
+        return `Transfer workflow to project ${op.destinationProjectId || ''}`.trim();
       default:
         return `Workflow ${op.type}`;
     }
@@ -478,6 +611,10 @@ function inferIntentFromOperations(operations: any[]): string {
   if (typeSet.has('updateNode')) {
     const count = opTypes.filter((t) => t === 'updateNode').length;
     summary.push(`update ${count} node${count > 1 ? 's' : ''}`);
+  }
+  if (typeSet.has('patchNodeField')) {
+    const count = opTypes.filter((t) => t === 'patchNodeField').length;
+    summary.push(`patch ${count} field${count > 1 ? 's' : ''}`);
   }
   if (typeSet.has('addConnection') || typeSet.has('rewireConnection')) {
     summary.push('modify connections');

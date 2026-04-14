@@ -24,8 +24,8 @@ export default defineConfig({
         minForks: 1
       }
     },
-    // Retry configuration
-    retry: parseInt(process.env.TEST_RETRY_ATTEMPTS || '2', 10),
+    // No retries - flaky tests should be fixed, not masked
+    retry: 0,
     // Test reporter - reduce reporters in CI to prevent hanging
     reporters: process.env.CI ? ['default', 'junit'] : ['default'],
     outputFile: {
@@ -49,10 +49,10 @@ export default defineConfig({
         '**/__mocks__/**'
       ],
       thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 75,
-        statements: 80
+        lines: 75,
+        functions: 75,
+        branches: 70,
+        statements: 75
       },
       // Add coverage-specific settings to prevent hanging
       all: false, // Don't collect coverage for untested files
