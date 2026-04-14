@@ -138,9 +138,13 @@ async function rebuild() {
   // The content-synced FTS5 table (content=nodes) can accumulate stale rowid
   // references when rows are deleted and re-inserted during a rebuild cycle.
   // An explicit rebuild re-indexes all current rows from the nodes table.
-  console.log('\n🔍 Rebuilding FTS5 search index...');
-  db.prepare("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')").run();
-  console.log('✅ FTS5 index rebuilt successfully');
+  if (db.checkFTS5Support()) {
+    console.log('\n🔍 Rebuilding FTS5 search index...');
+    db.prepare("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')").run();
+    console.log('✅ FTS5 index rebuilt successfully');
+  } else {
+    console.log('\n⚠️  FTS5 not supported by current adapter, skipping index rebuild');
+  }
 
   // Validation check
   console.log('\n🔍 Running validation checks...');
