@@ -44,6 +44,8 @@ export interface DocumentationGeneratorConfig {
 }
 export declare class DocumentationGenerator {
     private client;
+    private baseUrl;
+    private apiKey;
     private model;
     private maxTokens;
     private timeout;
@@ -61,6 +63,7 @@ export declare class DocumentationGenerator {
         success: boolean;
         message: string;
     }>;
+    private chatCompletion;
     private sleep;
 }
 export declare function createDocumentationGenerator(): DocumentationGenerator;
