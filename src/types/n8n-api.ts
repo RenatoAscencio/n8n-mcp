@@ -311,6 +311,7 @@ export interface WebhookRequest {
 // MCP Tool Response Type
 export interface McpToolResponse {
   success: boolean;
+  saved?: boolean;
   data?: unknown;
   error?: string;
   message?: string;
@@ -318,6 +319,7 @@ export interface McpToolResponse {
   details?: Record<string, unknown>;
   executionId?: string;
   workflowId?: string;
+  operationsApplied?: number;
 }
 
 // Execution Filtering Types
@@ -452,4 +454,82 @@ export interface ErrorSuggestion {
   title: string;
   description: string;
   confidence: 'high' | 'medium' | 'low';
+}
+
+// Data Table types
+export interface DataTableColumn {
+  name: string;
+  type?: 'string' | 'number' | 'boolean' | 'date';
+}
+
+export interface DataTableColumnResponse {
+  id: string;
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'date';
+  index: number;
+}
+
+export interface DataTable {
+  id: string;
+  name: string;
+  columns?: DataTableColumnResponse[];
+  projectId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface DataTableRow {
+  id?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  [columnName: string]: unknown;
+}
+
+export interface DataTableFilterCondition {
+  columnName: string;
+  condition: 'eq' | 'neq' | 'like' | 'ilike' | 'gt' | 'gte' | 'lt' | 'lte';
+  value?: any;
+}
+
+export interface DataTableFilter {
+  type?: 'and' | 'or';
+  filters: DataTableFilterCondition[];
+}
+
+export interface DataTableListParams {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface DataTableRowListParams {
+  limit?: number;
+  cursor?: string;
+  filter?: string;
+  sortBy?: string;
+  search?: string;
+}
+
+export interface DataTableInsertRowsParams {
+  data: Record<string, unknown>[];
+  returnType?: 'count' | 'id' | 'all';
+}
+
+export interface DataTableUpdateRowsParams {
+  filter: DataTableFilter;
+  data: Record<string, unknown>;
+  returnData?: boolean;
+  dryRun?: boolean;
+}
+
+export interface DataTableUpsertRowParams {
+  filter: DataTableFilter;
+  data: Record<string, unknown>;
+  returnData?: boolean;
+  dryRun?: boolean;
+}
+
+export interface DataTableDeleteRowsParams {
+  filter: string;
+  returnData?: boolean;
+  dryRun?: boolean;
 }

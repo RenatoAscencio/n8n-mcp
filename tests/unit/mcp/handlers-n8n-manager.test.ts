@@ -16,6 +16,12 @@ import { ExecutionStatus } from '@/types/n8n-api';
 vi.mock('@/services/n8n-api-client');
 vi.mock('@/services/workflow-validator');
 vi.mock('@/database/node-repository');
+vi.mock('@/services/workflow-versioning-service', () => ({
+  WorkflowVersioningService: vi.fn().mockImplementation(() => ({
+    createBackup: vi.fn().mockResolvedValue({ versionId: 'v1', versionNumber: 1, pruned: 0 }),
+    getVersions: vi.fn().mockResolvedValue([]),
+  })),
+}));
 vi.mock('@/config/n8n-api', () => ({
   getN8nApiConfig: vi.fn()
 }));
@@ -100,6 +106,16 @@ describe('handlers-n8n-manager', () => {
       listExecutions: vi.fn(),
       deleteExecution: vi.fn(),
       healthCheck: vi.fn(),
+      createDataTable: vi.fn(),
+      listDataTables: vi.fn(),
+      getDataTable: vi.fn(),
+      updateDataTable: vi.fn(),
+      deleteDataTable: vi.fn(),
+      getDataTableRows: vi.fn(),
+      insertDataTableRows: vi.fn(),
+      updateDataTableRows: vi.fn(),
+      upsertDataTableRow: vi.fn(),
+      deleteDataTableRows: vi.fn(),
     };
 
     // Setup mock repository
@@ -631,6 +647,27 @@ describe('handlers-n8n-manager', () => {
         expect(result.details.errors[0]).toContain('Webhook');
       });
     });
+
+    it('should pass projectId to API when provided', async () => {
+      const testWorkflow = createTestWorkflow();
+      const input = {
+        name: 'Test Workflow',
+        nodes: testWorkflow.nodes,
+        connections: testWorkflow.connections,
+        projectId: 'project-abc-123',
+      };
+
+      mockApiClient.createWorkflow.mockResolvedValue(testWorkflow);
+
+      const result = await handlers.handleCreateWorkflow(input);
+
+      expect(result.success).toBe(true);
+      expect(mockApiClient.createWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'project-abc-123',
+        })
+      );
+    });
   });
 
   describe('handleGetWorkflow', () => {
@@ -936,6 +973,52 @@ describe('handlers-n8n-manager', () => {
         })
       );
     });
+
+    // Issue #774: opencode and similar MCP clients serialize all schema fields,
+    // including optional ones, as empty strings. Empty strings must be coerced
+    // to undefined so they don't reach the n8n API as `?cursor=&projectId=`.
+    it('should coerce empty-string optional params to undefined (issue #774)', async () => {
+      mockApiClient.listWorkflows.mockResolvedValue({ data: [], nextCursor: null });
+
+      const result = await handlers.handleListWorkflows({
+        cursor: '',
+        projectId: '',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockApiClient.listWorkflows).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cursor: undefined,
+          projectId: undefined,
+        })
+      );
+    });
+  });
+
+  describe('handleListExecutions', () => {
+    // Issue #774: opencode and similar MCP clients serialize all schema fields,
+    // including optional ones, as empty strings. Empty strings must be coerced
+    // to undefined so they don't reach the n8n API as `?cursor=&workflowId=`.
+    it('should coerce empty-string optional params to undefined (issue #774)', async () => {
+      mockApiClient.listExecutions.mockResolvedValue({ data: [], nextCursor: null });
+
+      const result = await handlers.handleListExecutions({
+        cursor: '',
+        workflowId: '',
+        projectId: '',
+        status: '',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockApiClient.listExecutions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cursor: undefined,
+          workflowId: undefined,
+          projectId: undefined,
+          status: undefined,
+        })
+      );
+    });
   });
 
   describe('handleValidateWorkflow', () => {
@@ -1081,10 +1164,10 @@ describe('handlers-n8n-manager', () => {
             enabled: true,
           },
           managementTools: {
-            count: 13,
+            count: 14,
             enabled: true,
           },
-          totalAvailable: 20,
+          totalAvailable: 21,
         },
       });
 
@@ -1310,6 +1393,574 @@ describe('handlers-n8n-manager', () => {
       });
 
       expect(result.error).toMatch(/mode:\s*'preview'/);
+    });
+  });
+
+  describe('handleUpdateWorkflow - credential preservation', () => {
+    function mockCurrentWorkflow(nodes: any[]): void {
+      const workflow = createTestWorkflow({ id: 'wf-1', active: false, nodes });
+      mockApiClient.getWorkflow.mockResolvedValue(workflow);
+      mockApiClient.updateWorkflow.mockResolvedValue({ ...workflow, updatedAt: '2024-01-02' });
+    }
+
+    function getSentNodes(): any[] {
+      return mockApiClient.updateWorkflow.mock.calls[0][1].nodes;
+    }
+
+    it('should preserve credentials from current workflow when update nodes omit them', async () => {
+      mockCurrentWorkflow([
+        {
+          id: 'node-1', name: 'Postgres', type: 'n8n-nodes-base.postgres',
+          typeVersion: 2, position: [100, 100],
+          parameters: { operation: 'executeQuery', query: 'SELECT 1' },
+          credentials: { postgresApi: { id: 'cred-123', name: 'My Postgres' } },
+        },
+        {
+          id: 'node-2', name: 'HTTP Request', type: 'n8n-nodes-base.httpRequest',
+          typeVersion: 4, position: [300, 100],
+          parameters: { url: 'https://example.com' },
+          credentials: { httpBasicAuth: { id: 'cred-456', name: 'Basic Auth' } },
+        },
+        {
+          id: 'node-3', name: 'Set', type: 'n8n-nodes-base.set',
+          typeVersion: 3, position: [500, 100], parameters: {},
+        },
+      ]);
+
+      await handlers.handleUpdateWorkflow(
+        {
+          id: 'wf-1',
+          nodes: [
+            {
+              id: 'node-1', name: 'Postgres', type: 'n8n-nodes-base.postgres',
+              typeVersion: 2, position: [100, 100],
+              parameters: { operation: 'executeQuery', query: 'SELECT * FROM users' },
+            },
+            {
+              id: 'node-2', name: 'HTTP Request', type: 'n8n-nodes-base.httpRequest',
+              typeVersion: 4, position: [300, 100],
+              parameters: { url: 'https://example.com/v2' },
+            },
+            {
+              id: 'node-3', name: 'Set', type: 'n8n-nodes-base.set',
+              typeVersion: 3, position: [500, 100], parameters: { mode: 'manual' },
+            },
+          ],
+          connections: {},
+        },
+        mockRepository,
+      );
+
+      const sentNodes = getSentNodes();
+      expect(sentNodes[0].credentials).toEqual({ postgresApi: { id: 'cred-123', name: 'My Postgres' } });
+      expect(sentNodes[1].credentials).toEqual({ httpBasicAuth: { id: 'cred-456', name: 'Basic Auth' } });
+      expect(sentNodes[2].credentials).toBeUndefined();
+    });
+
+    it('should not overwrite user-provided credentials', async () => {
+      mockCurrentWorkflow([
+        {
+          id: 'node-1', name: 'Postgres', type: 'n8n-nodes-base.postgres',
+          typeVersion: 2, position: [100, 100], parameters: {},
+          credentials: { postgresApi: { id: 'cred-old', name: 'Old Postgres' } },
+        },
+      ]);
+
+      await handlers.handleUpdateWorkflow(
+        {
+          id: 'wf-1',
+          nodes: [
+            {
+              id: 'node-1', name: 'Postgres', type: 'n8n-nodes-base.postgres',
+              typeVersion: 2, position: [100, 100], parameters: {},
+              credentials: { postgresApi: { id: 'cred-new', name: 'New Postgres' } },
+            },
+          ],
+          connections: {},
+        },
+        mockRepository,
+      );
+
+      const sentNodes = getSentNodes();
+      expect(sentNodes[0].credentials).toEqual({ postgresApi: { id: 'cred-new', name: 'New Postgres' } });
+    });
+
+    it('should match nodes by name when ids differ', async () => {
+      mockCurrentWorkflow([
+        {
+          id: 'server-id-1', name: 'Gmail', type: 'n8n-nodes-base.gmail',
+          typeVersion: 2, position: [100, 100], parameters: {},
+          credentials: { gmailOAuth2: { id: 'cred-gmail', name: 'Gmail' } },
+        },
+      ]);
+
+      await handlers.handleUpdateWorkflow(
+        {
+          id: 'wf-1',
+          nodes: [
+            {
+              id: 'client-id-different', name: 'Gmail', type: 'n8n-nodes-base.gmail',
+              typeVersion: 2, position: [100, 100],
+              parameters: { resource: 'message' },
+            },
+          ],
+          connections: {},
+        },
+        mockRepository,
+      );
+
+      const sentNodes = getSentNodes();
+      expect(sentNodes[0].credentials).toEqual({ gmailOAuth2: { id: 'cred-gmail', name: 'Gmail' } });
+    });
+
+    it('should treat empty credentials object as missing and carry forward', async () => {
+      mockCurrentWorkflow([
+        { id: 'node-1', name: 'Postgres', type: 'n8n-nodes-base.postgres', typeVersion: 2, position: [100, 100], parameters: {}, credentials: { postgresApi: { id: 'cred-123', name: 'My Postgres' } } },
+      ]);
+
+      await handlers.handleUpdateWorkflow(
+        {
+          id: 'wf-1',
+          nodes: [
+            { id: 'node-1', name: 'Postgres', type: 'n8n-nodes-base.postgres', typeVersion: 2, position: [100, 100], parameters: {}, credentials: {} },
+          ],
+          connections: {},
+        },
+        mockRepository,
+      );
+
+      const sentNodes = getSentNodes();
+      expect(sentNodes[0].credentials).toEqual({ postgresApi: { id: 'cred-123', name: 'My Postgres' } });
+    });
+  });
+
+  describe('handleAuditInstance — error message surfacing (#736)', () => {
+    beforeEach(() => {
+      mockApiClient.generateAudit = vi.fn();
+      mockApiClient.listAllWorkflows = vi.fn().mockResolvedValue([]);
+    });
+
+    it('includes the HTTP status when n8n responds with a server error', async () => {
+      const apiError: any = new Error('Invalid URL');
+      apiError.statusCode = 500;
+      mockApiClient.generateAudit.mockRejectedValue(apiError);
+
+      const result = await handlers.handleAuditInstance({ includeCustomScan: false });
+
+      expect(result.success).toBe(true);
+      expect(result.data.report).toContain('Built-in audit failed (HTTP 500): Invalid URL');
+    });
+
+    it('reports "no response from n8n" when the error has no status code', async () => {
+      mockApiClient.generateAudit.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+      const result = await handlers.handleAuditInstance({ includeCustomScan: false });
+
+      expect(result.data.report).toContain('Built-in audit failed (no response from n8n): connect ECONNREFUSED');
+    });
+
+    it('keeps the special-case 404 message for older n8n versions', async () => {
+      const notFound: any = new Error('Not Found');
+      notFound.statusCode = 404;
+      mockApiClient.generateAudit.mockRejectedValue(notFound);
+
+      const result = await handlers.handleAuditInstance({ includeCustomScan: false });
+
+      expect(result.data.report).toContain('Built-in audit endpoint not available on this n8n version.');
+    });
+  });
+
+  describe('handleCreateCredential — oAuth2 clientCredentials shim (#740)', () => {
+    beforeEach(() => {
+      mockApiClient.createCredential = vi.fn().mockResolvedValue({
+        id: 'cred-1',
+        name: 'shim-test',
+      });
+    });
+
+    function callCreateOAuth2(extra: Record<string, any> = {}) {
+      return handlers.handleCreateCredential({
+        action: 'create',
+        name: 'shim-test',
+        type: 'oAuth2Api',
+        data: {
+          grantType: 'clientCredentials',
+          accessTokenUrl: 'https://login.example.com/token',
+          clientId: 'cid',
+          clientSecret: 'secret',
+          scope: 'https://example.com/.default',
+          authentication: 'header',
+          ...extra,
+        },
+      });
+    }
+
+    it('strips useDynamicClientRegistration: false and injects required defaults', async () => {
+      await callCreateOAuth2({ useDynamicClientRegistration: false });
+
+      const sentData = mockApiClient.createCredential.mock.calls[0][0].data;
+      expect(sentData).not.toHaveProperty('useDynamicClientRegistration');
+      expect(sentData.sendAdditionalBodyProperties).toBe(false);
+      expect(sentData.additionalBodyProperties).toBe('');
+      // serverUrl is required by the spuriously-fired DCR branch when
+      // useDynamicClientRegistration is absent — empty string satisfies it.
+      expect(sentData.serverUrl).toBe('');
+    });
+
+    it('injects required defaults when useDynamicClientRegistration is absent', async () => {
+      await callCreateOAuth2();
+
+      const sentData = mockApiClient.createCredential.mock.calls[0][0].data;
+      expect(sentData.sendAdditionalBodyProperties).toBe(false);
+      expect(sentData.additionalBodyProperties).toBe('');
+      expect(sentData.serverUrl).toBe('');
+    });
+
+    it('does not strip useDynamicClientRegistration when explicitly true', async () => {
+      await callCreateOAuth2({ useDynamicClientRegistration: true, serverUrl: 'https://dcr.example.com' });
+
+      const sentData = mockApiClient.createCredential.mock.calls[0][0].data;
+      expect(sentData.useDynamicClientRegistration).toBe(true);
+      // Caller-supplied serverUrl must be preserved, not overwritten with the empty default.
+      expect(sentData.serverUrl).toBe('https://dcr.example.com');
+    });
+
+    it('does not shim other grant types', async () => {
+      await handlers.handleCreateCredential({
+        action: 'create',
+        name: 'auth-code',
+        type: 'oAuth2Api',
+        data: {
+          grantType: 'authorizationCode',
+          authUrl: 'https://example.com/auth',
+          accessTokenUrl: 'https://example.com/token',
+          clientId: 'cid',
+          clientSecret: 'secret',
+        },
+      });
+
+      const sentData = mockApiClient.createCredential.mock.calls[0][0].data;
+      expect(sentData).not.toHaveProperty('sendAdditionalBodyProperties');
+      expect(sentData).not.toHaveProperty('additionalBodyProperties');
+    });
+
+    it('does not shim non-oAuth2Api credential types', async () => {
+      await handlers.handleCreateCredential({
+        action: 'create',
+        name: 'pg',
+        type: 'postgres',
+        data: { host: 'db.example.com' },
+      });
+
+      const sentData = mockApiClient.createCredential.mock.calls[0][0].data;
+      expect(sentData).toEqual({ host: 'db.example.com' });
+    });
+
+    it('does NOT inject serverUrl when DCR is explicitly enabled (lets n8n surface real missing-field error)', async () => {
+      // Caller opted into Dynamic Client Registration but forgot serverUrl.
+      // Pre-fix this would silently inject "" and n8n would error with an
+      // "invalid empty URL" message that hides the real problem.
+      await callCreateOAuth2({ useDynamicClientRegistration: true });
+
+      const sentData = mockApiClient.createCredential.mock.calls[0][0].data;
+      expect(sentData).not.toHaveProperty('serverUrl');
+      expect(sentData.useDynamicClientRegistration).toBe(true);
+    });
+
+    it('applies the same shim on the update path (#740)', async () => {
+      mockApiClient.updateCredential = vi.fn().mockResolvedValue({
+        id: 'cred-99',
+        name: 'shim-update',
+      });
+
+      await handlers.handleUpdateCredential({
+        action: 'update',
+        id: 'cred-99',
+        type: 'oAuth2Api',
+        data: {
+          grantType: 'clientCredentials',
+          accessTokenUrl: 'https://login.example.com/token',
+          clientId: 'cid',
+          clientSecret: 'secret',
+          scope: 'https://example.com/.default',
+          authentication: 'header',
+          useDynamicClientRegistration: false,
+        },
+      });
+
+      const updatePayload = mockApiClient.updateCredential.mock.calls[0][1];
+      expect(updatePayload.data).not.toHaveProperty('useDynamicClientRegistration');
+      expect(updatePayload.data.sendAdditionalBodyProperties).toBe(false);
+      expect(updatePayload.data.additionalBodyProperties).toBe('');
+      expect(updatePayload.data.serverUrl).toBe('');
+    });
+
+    it('derives credential type from server when omitted on update (#740)', async () => {
+      // Common partial-update pattern: caller passes only `data` and relies on
+      // n8n to keep the existing type. Pre-fix the shim never fired.
+      mockApiClient.updateCredential = vi.fn().mockResolvedValue({
+        id: 'cred-100',
+        name: 'shim-derived',
+      });
+      mockApiClient.getCredential = vi.fn().mockResolvedValue({
+        id: 'cred-100',
+        name: 'shim-derived',
+        type: 'oAuth2Api',
+      });
+
+      await handlers.handleUpdateCredential({
+        action: 'update',
+        id: 'cred-100',
+        // type intentionally omitted
+        data: {
+          grantType: 'clientCredentials',
+          accessTokenUrl: 'https://login.example.com/token',
+          clientId: 'cid',
+          clientSecret: 'secret',
+          scope: 'https://example.com/.default',
+          authentication: 'header',
+        },
+      });
+
+      expect(mockApiClient.getCredential).toHaveBeenCalledWith('cred-100');
+      const updatePayload = mockApiClient.updateCredential.mock.calls[0][1];
+      expect(updatePayload.data.sendAdditionalBodyProperties).toBe(false);
+      expect(updatePayload.data.additionalBodyProperties).toBe('');
+      expect(updatePayload.data.serverUrl).toBe('');
+    });
+
+    it('skips the type-derivation fetch when data is not clientCredentials (avoids extra round-trip)', async () => {
+      mockApiClient.updateCredential = vi.fn().mockResolvedValue({
+        id: 'cred-101',
+        name: 'no-fetch',
+      });
+      mockApiClient.getCredential = vi.fn();
+
+      await handlers.handleUpdateCredential({
+        action: 'update',
+        id: 'cred-101',
+        // type omitted, but data is not a clientCredentials oAuth2 payload
+        data: { host: 'db.example.com' },
+      });
+
+      expect(mockApiClient.getCredential).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('credential usage enrichment (includeUsage)', () => {
+    const credA = { id: 'cred-A', name: 'BaseLinker API', type: 'httpHeaderAuth' };
+    const credB = { id: 'cred-B', name: 'Slack Bot', type: 'slackApi' };
+    const credC = { id: 'cred-C', name: 'Unused Key', type: 'httpHeaderAuth' };
+
+    const wfUsesA = {
+      id: 'wf-1',
+      name: 'BaseLinker Sync',
+      active: true,
+      nodes: [
+        {
+          id: 'n1',
+          name: 'HTTP Request',
+          type: 'n8n-nodes-base.httpRequest',
+          credentials: { httpHeaderAuth: { id: 'cred-A', name: 'BaseLinker API' } },
+        },
+        // Second reference to the same credential — must dedupe to one workflow entry.
+        {
+          id: 'n2',
+          name: 'Another HTTP',
+          type: 'n8n-nodes-base.httpRequest',
+          credentials: { httpHeaderAuth: { id: 'cred-A', name: 'BaseLinker API' } },
+        },
+      ],
+    };
+    const wfUsesAandB = {
+      id: 'wf-2',
+      name: 'BaseLinker + Slack',
+      active: false,
+      nodes: [
+        {
+          id: 'n1',
+          type: 'n8n-nodes-base.httpRequest',
+          credentials: { httpHeaderAuth: { id: 'cred-A' } },
+        },
+        {
+          id: 'n2',
+          type: 'n8n-nodes-base.slack',
+          credentials: { slackApi: { id: 'cred-B' } },
+        },
+      ],
+    };
+    const wfNoCreds = {
+      id: 'wf-3',
+      name: 'Plain Webhook',
+      active: true,
+      nodes: [{ id: 'n1', type: 'n8n-nodes-base.webhook' }],
+    };
+
+    beforeEach(() => {
+      mockApiClient.listCredentials = vi.fn().mockResolvedValue({
+        data: [credA, credB, credC],
+        nextCursor: null,
+      });
+      mockApiClient.getCredential = vi.fn();
+      mockApiClient.listAllWorkflows = vi.fn().mockResolvedValue([
+        wfUsesA,
+        wfUsesAandB,
+        wfNoCreds,
+      ]);
+    });
+
+    it('list without includeUsage does not scan workflows or change shape', async () => {
+      const result = await handlers.handleListCredentials({ action: 'list' });
+
+      expect(mockApiClient.listAllWorkflows).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      expect(result.data.credentials).toEqual([credA, credB, credC]);
+      expect(result.data.credentials[0]).not.toHaveProperty('usedIn');
+    });
+
+    it('list with includeUsage attaches deduplicated workflow refs and counts', async () => {
+      const result = await handlers.handleListCredentials({
+        action: 'list',
+        includeUsage: true,
+      });
+
+      expect(mockApiClient.listAllWorkflows).toHaveBeenCalledTimes(1);
+      const byId = Object.fromEntries(
+        result.data.credentials.map((c: any) => [c.id, c])
+      );
+
+      expect(byId['cred-A'].usageCount).toBe(2);
+      expect(byId['cred-A'].usedIn).toEqual([
+        { id: 'wf-1', name: 'BaseLinker Sync', active: true },
+        { id: 'wf-2', name: 'BaseLinker + Slack', active: false },
+      ]);
+
+      expect(byId['cred-B'].usageCount).toBe(1);
+      expect(byId['cred-B'].usedIn).toEqual([
+        { id: 'wf-2', name: 'BaseLinker + Slack', active: false },
+      ]);
+
+      expect(byId['cred-C'].usageCount).toBe(0);
+      expect(byId['cred-C'].usedIn).toEqual([]);
+    });
+
+    it('get with includeUsage enriches a single credential', async () => {
+      mockApiClient.getCredential.mockResolvedValue(credA);
+
+      const result = await handlers.handleGetCredential({
+        action: 'get',
+        id: 'cred-A',
+        includeUsage: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.usageCount).toBe(2);
+      expect(result.data.usedIn).toEqual([
+        { id: 'wf-1', name: 'BaseLinker Sync', active: true },
+        { id: 'wf-2', name: 'BaseLinker + Slack', active: false },
+      ]);
+    });
+
+    it('get without includeUsage skips the workflow scan', async () => {
+      mockApiClient.getCredential.mockResolvedValue(credA);
+
+      const result = await handlers.handleGetCredential({
+        action: 'get',
+        id: 'cred-A',
+      });
+
+      expect(mockApiClient.listAllWorkflows).not.toHaveBeenCalled();
+      expect(result.data).not.toHaveProperty('usedIn');
+      expect(result.data).not.toHaveProperty('usageCount');
+    });
+
+    it('ignores nodes with malformed credential refs (empty id, missing id, missing wf.id)', async () => {
+      mockApiClient.listAllWorkflows.mockResolvedValue([
+        {
+          id: 'wf-bad-1',
+          name: 'Empty cred id',
+          active: true,
+          nodes: [{ id: 'n', type: 'x', credentials: { httpHeaderAuth: { id: '' } } }],
+        },
+        {
+          id: 'wf-bad-2',
+          name: 'Missing cred id',
+          active: true,
+          nodes: [{ id: 'n', type: 'x', credentials: { httpHeaderAuth: { name: 'no id' } } }],
+        },
+        {
+          // Workflow without an id should be skipped entirely.
+          name: 'Draft no id',
+          active: true,
+          nodes: [{ id: 'n', type: 'x', credentials: { httpHeaderAuth: { id: 'cred-A' } } }],
+        },
+        wfUsesA,
+      ]);
+
+      const result = await handlers.handleListCredentials({
+        action: 'list',
+        includeUsage: true,
+      });
+
+      const byId = Object.fromEntries(
+        result.data.credentials.map((c: any) => [c.id, c])
+      );
+      expect(byId['cred-A'].usageCount).toBe(1);
+      expect(byId['cred-A'].usedIn).toEqual([
+        { id: 'wf-1', name: 'BaseLinker Sync', active: true },
+      ]);
+    });
+
+    it('defaults workflow.active to false when omitted', async () => {
+      mockApiClient.listAllWorkflows.mockResolvedValue([
+        {
+          id: 'wf-no-active',
+          name: 'Active omitted',
+          // active intentionally omitted
+          nodes: [{ id: 'n', type: 'x', credentials: { httpHeaderAuth: { id: 'cred-A' } } }],
+        },
+      ]);
+
+      const result = await handlers.handleListCredentials({
+        action: 'list',
+        includeUsage: true,
+      });
+
+      const byId = Object.fromEntries(
+        result.data.credentials.map((c: any) => [c.id, c])
+      );
+      expect(byId['cred-A'].usedIn).toEqual([
+        { id: 'wf-no-active', name: 'Active omitted', active: false },
+      ]);
+    });
+
+    it('list degrades gracefully when the workflow scan fails', async () => {
+      mockApiClient.listAllWorkflows.mockRejectedValue(new Error('network down'));
+
+      const result = await handlers.handleListCredentials({
+        action: 'list',
+        includeUsage: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.credentials).toEqual([credA, credB, credC]);
+      expect(result.data.usageScanError).toBe('network down');
+    });
+
+    it('get degrades gracefully when the workflow scan fails', async () => {
+      mockApiClient.getCredential.mockResolvedValue(credA);
+      mockApiClient.listAllWorkflows.mockRejectedValue(new Error('boom'));
+
+      const result = await handlers.handleGetCredential({
+        action: 'get',
+        id: 'cred-A',
+        includeUsage: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.id).toBe('cred-A');
+      expect(result.data.usageScanError).toBe('boom');
+      expect(result.data).not.toHaveProperty('usedIn');
     });
   });
 });

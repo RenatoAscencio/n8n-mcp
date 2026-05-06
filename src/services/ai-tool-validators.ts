@@ -28,6 +28,21 @@ export interface WorkflowNode {
   typeVersion?: number;
 }
 
+/**
+ * Get tool description from node, checking all possible property locations.
+ * Different n8n tool types store descriptions in different places:
+ * - toolDescription: HTTP Request Tool, Vector Store Tool
+ * - description: Workflow Tool, Code Tool, AI Agent Tool
+ * - options.description: SerpApi, Wikipedia, SearXNG
+ */
+function getToolDescription(node: WorkflowNode): string | undefined {
+  return (
+    node.parameters.toolDescription ||
+    node.parameters.description ||
+    node.parameters.options?.description
+  );
+}
+
 export interface WorkflowJson {
   name?: string;
   nodes: WorkflowNode[];
@@ -58,7 +73,7 @@ export function validateHTTPRequestTool(node: WorkflowNode): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -66,7 +81,7 @@ export function validateHTTPRequestTool(node: WorkflowNode): ValidationIssue[] {
       message: `HTTP Request Tool "${node.name}" has no toolDescription. Add a clear description to help the LLM know when to use this API.`,
       code: 'MISSING_TOOL_DESCRIPTION'
     });
-  } else if (node.parameters.toolDescription.trim().length < MIN_DESCRIPTION_LENGTH_MEDIUM) {
+  } else if (getToolDescription(node)!.trim().length < MIN_DESCRIPTION_LENGTH_MEDIUM) {
     issues.push({
       severity: 'warning',
       nodeId: node.id,
@@ -111,20 +126,39 @@ export function validateHTTPRequestTool(node: WorkflowNode): ValidationIssue[] {
     }
   }
 
-  // 3. Validate placeholders match definitions
+  // 3. Validate placeholders match definitions.
+  //
+  // Linear indexOf scan instead of `/\{([^}]+)\}/g`: the greedy character
+  // class makes the regex polynomial on inputs like `{{{{{...` where no
+  // closing `}` is ever found. The manual scan is O(n) regardless of
+  // input shape. Addresses CodeQL js/polynomial-redos.
   if (node.parameters.url || node.parameters.body || node.parameters.headers) {
-    const placeholderRegex = /\{([^}]+)\}/g;
     const placeholders = new Set<string>();
 
-    // Extract placeholders from URL, body, headers
-    [node.parameters.url, node.parameters.body, JSON.stringify(node.parameters.headers || {})].forEach(text => {
-      if (text) {
-        let match;
-        while ((match = placeholderRegex.exec(text)) !== null) {
-          placeholders.add(match[1]);
+    const extractPlaceholders = (text: string): void => {
+      let cursor = 0;
+      while (cursor < text.length) {
+        const open = text.indexOf('{', cursor);
+        if (open === -1) return;
+        const close = text.indexOf('}', open + 1);
+        if (close === -1) return;
+        // Only record non-empty placeholder names.
+        if (close > open + 1) {
+          placeholders.add(text.slice(open + 1, close));
         }
+        cursor = close + 1;
       }
-    });
+    };
+
+    for (const text of [
+      node.parameters.url,
+      node.parameters.body,
+      JSON.stringify(node.parameters.headers || {}),
+    ]) {
+      if (text) {
+        extractPlaceholders(text);
+      }
+    }
 
     // If placeholders exist in URL/body/headers
     if (placeholders.size > 0) {
@@ -214,8 +248,8 @@ export function validateHTTPRequestTool(node: WorkflowNode): ValidationIssue[] {
 export function validateCodeTool(node: WorkflowNode): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
-  // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  // 1. Check toolDescription (REQUIRED) - check all possible locations
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -261,7 +295,7 @@ export function validateVectorStoreTool(
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -302,7 +336,7 @@ export function validateWorkflowTool(node: WorkflowNode, reverseConnections?: Ma
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -337,7 +371,7 @@ export function validateAIAgentTool(
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -378,7 +412,7 @@ export function validateMCPClientTool(node: WorkflowNode): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -406,20 +440,14 @@ export function validateMCPClientTool(node: WorkflowNode): ValidationIssue[] {
  * 7-8. Simple Tools (Calculator, Think) Validators
  * From spec lines 1868-2009
  */
-export function validateCalculatorTool(node: WorkflowNode): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
-
-  // Calculator Tool has a built-in description and is self-explanatory
-  // toolDescription is optional - no validation needed
-  return issues;
+export function validateCalculatorTool(_node: WorkflowNode): ValidationIssue[] {
+  // Calculator Tool has a built-in description - no validation needed
+  return [];
 }
 
-export function validateThinkTool(node: WorkflowNode): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
-
-  // Think Tool has a built-in description and is self-explanatory
-  // toolDescription is optional - no validation needed
-  return issues;
+export function validateThinkTool(_node: WorkflowNode): ValidationIssue[] {
+  // Think Tool has a built-in description - no validation needed
+  return [];
 }
 
 /**
@@ -430,7 +458,7 @@ export function validateSerpApiTool(node: WorkflowNode): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -457,7 +485,7 @@ export function validateWikipediaTool(node: WorkflowNode): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -487,7 +515,7 @@ export function validateSearXngTool(node: WorkflowNode): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // 1. Check toolDescription (REQUIRED)
-  if (!node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'error',
       nodeId: node.id,
@@ -526,7 +554,7 @@ export function validateWolframAlphaTool(node: WorkflowNode): ValidationIssue[] 
   }
 
   // 2. Check description (INFO)
-  if (!node.parameters.description && !node.parameters.toolDescription) {
+  if (!getToolDescription(node)) {
     issues.push({
       severity: 'info',
       nodeId: node.id,

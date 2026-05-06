@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatHandler = void 0;
 const zod_1 = require("zod");
 const axios_1 = __importDefault(require("axios"));
+const crypto_1 = require("crypto");
 const base_handler_1 = require("./base-handler");
 const trigger_detector_1 = require("../trigger-detector");
 const chatInputSchema = zod_1.z.object({
@@ -52,7 +53,7 @@ const chatInputSchema = zod_1.z.object({
     waitForResponse: zod_1.z.boolean().optional(),
 });
 function generateSessionId() {
-    return `session_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+    return `session_${Date.now()}_${(0, crypto_1.randomUUID)()}`;
 }
 class ChatHandler extends base_handler_1.BaseTriggerHandler {
     constructor() {
@@ -83,6 +84,9 @@ class ChatHandler extends base_handler_1.BaseTriggerHandler {
             if (!validation.valid) {
                 return this.errorResponse(input, `SSRF protection: ${validation.reason}`, startTime);
             }
+            const pinned = validation.address && validation.family
+                ? SSRFProtection.createPinnedAgents(validation.address, validation.family)
+                : undefined;
             const sessionId = input.sessionId || generateSessionId();
             const chatPayload = {
                 action: 'sendMessage',
@@ -100,6 +104,9 @@ class ChatHandler extends base_handler_1.BaseTriggerHandler {
                 data: chatPayload,
                 timeout: input.timeout || (input.waitForResponse !== false ? 120000 : 30000),
                 validateStatus: (status) => status < 500,
+                maxRedirects: 0,
+                httpAgent: pinned?.httpAgent,
+                httpsAgent: pinned?.httpsAgent,
             };
             const response = await axios_1.default.request(config);
             const chatResponse = response.data;

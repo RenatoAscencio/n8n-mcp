@@ -1912,20 +1912,142 @@ return [{"json": {"result": result}}]
         });
       });
 
+      it('should not error on primitive return inside helper functions', () => {
+        context.config = {
+          language: 'javaScript',
+          jsCode: 'function isValid(item) { return false; }\nconst items = $input.all();\nreturn items.filter(isValid).map(i => ({json: i.json}));'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const primitiveErrors = context.errors.filter(e => e.message === 'Cannot return primitive values directly');
+        expect(primitiveErrors).toHaveLength(0);
+      });
+
+      it('should not error on primitive return inside arrow function helpers', () => {
+        context.config = {
+          language: 'javaScript',
+          jsCode: 'const isValid = (item) => { return false; };\nreturn $input.all().filter(isValid).map(i => ({json: i.json}));'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const primitiveErrors = context.errors.filter(e => e.message === 'Cannot return primitive values directly');
+        expect(primitiveErrors).toHaveLength(0);
+      });
+
+      it('should not error on primitive return inside async function helpers', () => {
+        context.config = {
+          language: 'javaScript',
+          jsCode: 'async function fetchData(url) { return null; }\nconst data = await fetchData("https://api.example.com");\nreturn [{json: {data}}];'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const primitiveErrors = context.errors.filter(e => e.message === 'Cannot return primitive values directly');
+        expect(primitiveErrors).toHaveLength(0);
+      });
+
+      it('should still error on primitive return without helper functions', () => {
+        context.config = {
+          language: 'javaScript',
+          jsCode: 'return "success";'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        expect(context.errors).toContainEqual(expect.objectContaining({
+          message: 'Cannot return primitive values directly'
+        }));
+      });
+
+      it('should not error on bare object return in runOnceForEachItem mode', () => {
+        context.config = {
+          language: 'javaScript',
+          mode: 'runOnceForEachItem',
+          jsCode: 'return {status: "ok", data: 123};'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const returnErrors = context.errors.filter(
+          (e: any) => e.message === 'Return value must be an array of objects'
+        );
+        expect(returnErrors).toHaveLength(0);
+      });
+
+      it('should not error on primitive return in runOnceForEachItem mode', () => {
+        context.config = {
+          language: 'javaScript',
+          mode: 'runOnceForEachItem',
+          jsCode: 'return "success";'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const primitiveErrors = context.errors.filter(
+          (e: any) => e.message === 'Cannot return primitive values directly'
+        );
+        expect(primitiveErrors).toHaveLength(0);
+      });
+
+      it('should still error on bare object return in runOnceForAllItems mode', () => {
+        context.config = {
+          language: 'javaScript',
+          mode: 'runOnceForAllItems',
+          jsCode: 'return {status: "ok"};'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        expect(context.errors).toContainEqual(expect.objectContaining({
+          message: 'Return value must be an array of objects'
+        }));
+      });
+
       it('should error on Python primitive return', () => {
         context.config = {
           language: 'python',
           pythonCode: 'return "success"'
         };
-        
+
         NodeSpecificValidators.validateCode(context);
-        
+
         expect(context.errors).toContainEqual({
           type: 'invalid_value',
           property: 'pythonCode',
           message: 'Cannot return primitive values directly',
           fix: 'Return list of dicts: return [{"json": {"value": your_data}}]'
         });
+      });
+
+      it('should error on Python bare dict return in runOnceForAllItems mode', () => {
+        context.config = {
+          language: 'python',
+          mode: 'runOnceForAllItems',
+          pythonCode: 'return {"status": "ok"}'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        expect(context.errors).toContainEqual(expect.objectContaining({
+          message: 'Return value must be a list of dicts'
+        }));
+      });
+
+      it('should not error on Python bare dict return in runOnceForEachItem mode', () => {
+        context.config = {
+          language: 'python',
+          mode: 'runOnceForEachItem',
+          pythonCode: 'return {"status": "ok"}'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const dictErrors = context.errors.filter(
+          (e: any) => e.message === 'Return value must be a list of dicts'
+        );
+        expect(dictErrors).toHaveLength(0);
       });
 
       it('should error on array of non-objects', () => {
@@ -2036,6 +2158,30 @@ return [{"json": {"result": result}}]
           message: 'Invalid $ usage detected',
           suggestion: 'n8n variables start with $: $json, $input, $node, $workflow, $execution'
         });
+      });
+
+      it('should not warn about $() node reference syntax', () => {
+        context.config = {
+          language: 'javaScript',
+          jsCode: 'const data = $("Previous Node").first().json;\nreturn [{json: data}];'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const dollarWarnings = context.warnings.filter(w => w.message === 'Invalid $ usage detected');
+        expect(dollarWarnings).toHaveLength(0);
+      });
+
+      it('should not warn about $_ variables', () => {
+        context.config = {
+          language: 'javaScript',
+          jsCode: 'const $_temp = 1;\nreturn [{json: {value: $_temp}}];'
+        };
+
+        NodeSpecificValidators.validateCode(context);
+
+        const dollarWarnings = context.warnings.filter(w => w.message === 'Invalid $ usage detected');
+        expect(dollarWarnings).toHaveLength(0);
       });
 
       it('should correct helpers usage', () => {
@@ -2308,6 +2454,73 @@ return [{"json": {"result": result}}]
 
         expect(context.autofix.onError).toBe('continueRegularOutput');
       });
+    });
+  });
+
+  describe('validateSet', () => {
+    it('should not warn when Set v3 has populated assignments', () => {
+      context.config = {
+        mode: 'manual',
+        assignments: {
+          assignments: [
+            { id: '1', name: 'status', value: 'active', type: 'string' }
+          ]
+        }
+      };
+
+      NodeSpecificValidators.validateSet(context);
+
+      const fieldWarnings = context.warnings.filter(w => w.message.includes('no fields configured'));
+      expect(fieldWarnings).toHaveLength(0);
+    });
+
+    it('should not warn when Set v2 has populated values', () => {
+      context.config = {
+        mode: 'manual',
+        values: {
+          string: [{ name: 'field', value: 'val' }]
+        }
+      };
+
+      NodeSpecificValidators.validateSet(context);
+
+      const fieldWarnings = context.warnings.filter(w => w.message.includes('no fields configured'));
+      expect(fieldWarnings).toHaveLength(0);
+    });
+
+    it('should warn when Set v3 has empty assignments array', () => {
+      context.config = {
+        mode: 'manual',
+        assignments: { assignments: [] }
+      };
+
+      NodeSpecificValidators.validateSet(context);
+
+      const fieldWarnings = context.warnings.filter(w => w.message.includes('no fields configured'));
+      expect(fieldWarnings).toHaveLength(1);
+    });
+
+    it('should warn when Set manual mode has no values or assignments', () => {
+      context.config = {
+        mode: 'manual'
+      };
+
+      NodeSpecificValidators.validateSet(context);
+
+      const fieldWarnings = context.warnings.filter(w => w.message.includes('no fields configured'));
+      expect(fieldWarnings).toHaveLength(1);
+    });
+
+    it('should not warn when Set manual mode has jsonOutput', () => {
+      context.config = {
+        mode: 'manual',
+        jsonOutput: '{"key":"value"}'
+      };
+
+      NodeSpecificValidators.validateSet(context);
+
+      const fieldWarnings = context.warnings.filter(w => w.message.includes('no fields configured'));
+      expect(fieldWarnings).toHaveLength(0);
     });
   });
 

@@ -21,9 +21,14 @@ const MIN_DESCRIPTION_LENGTH_MEDIUM = 15;
 const MIN_DESCRIPTION_LENGTH_LONG = 20;
 const MAX_ITERATIONS_WARNING_THRESHOLD = 50;
 const MAX_TOPK_WARNING_THRESHOLD = 20;
+function getToolDescription(node) {
+    return (node.parameters.toolDescription ||
+        node.parameters.description ||
+        node.parameters.options?.description);
+}
 function validateHTTPRequestTool(node) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -32,7 +37,7 @@ function validateHTTPRequestTool(node) {
             code: 'MISSING_TOOL_DESCRIPTION'
         });
     }
-    else if (node.parameters.toolDescription.trim().length < MIN_DESCRIPTION_LENGTH_MEDIUM) {
+    else if (getToolDescription(node).trim().length < MIN_DESCRIPTION_LENGTH_MEDIUM) {
         issues.push({
             severity: 'warning',
             nodeId: node.id,
@@ -74,16 +79,31 @@ function validateHTTPRequestTool(node) {
         }
     }
     if (node.parameters.url || node.parameters.body || node.parameters.headers) {
-        const placeholderRegex = /\{([^}]+)\}/g;
         const placeholders = new Set();
-        [node.parameters.url, node.parameters.body, JSON.stringify(node.parameters.headers || {})].forEach(text => {
-            if (text) {
-                let match;
-                while ((match = placeholderRegex.exec(text)) !== null) {
-                    placeholders.add(match[1]);
+        const extractPlaceholders = (text) => {
+            let cursor = 0;
+            while (cursor < text.length) {
+                const open = text.indexOf('{', cursor);
+                if (open === -1)
+                    return;
+                const close = text.indexOf('}', open + 1);
+                if (close === -1)
+                    return;
+                if (close > open + 1) {
+                    placeholders.add(text.slice(open + 1, close));
                 }
+                cursor = close + 1;
             }
-        });
+        };
+        for (const text of [
+            node.parameters.url,
+            node.parameters.body,
+            JSON.stringify(node.parameters.headers || {}),
+        ]) {
+            if (text) {
+                extractPlaceholders(text);
+            }
+        }
         if (placeholders.size > 0) {
             const definitions = node.parameters.placeholderDefinitions?.values || [];
             const definedNames = new Set(definitions.map((d) => d.name));
@@ -154,7 +174,7 @@ function validateHTTPRequestTool(node) {
 }
 function validateCodeTool(node) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -184,7 +204,7 @@ function validateCodeTool(node) {
 }
 function validateVectorStoreTool(node, reverseConnections, workflow) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -216,7 +236,7 @@ function validateVectorStoreTool(node, reverseConnections, workflow) {
 }
 function validateWorkflowTool(node, reverseConnections) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -238,7 +258,7 @@ function validateWorkflowTool(node, reverseConnections) {
 }
 function validateAIAgentTool(node, reverseConnections) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -270,7 +290,7 @@ function validateAIAgentTool(node, reverseConnections) {
 }
 function validateMCPClientTool(node) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -290,17 +310,15 @@ function validateMCPClientTool(node) {
     }
     return issues;
 }
-function validateCalculatorTool(node) {
-    const issues = [];
-    return issues;
+function validateCalculatorTool(_node) {
+    return [];
 }
-function validateThinkTool(node) {
-    const issues = [];
-    return issues;
+function validateThinkTool(_node) {
+    return [];
 }
 function validateSerpApiTool(node) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -321,7 +339,7 @@ function validateSerpApiTool(node) {
 }
 function validateWikipediaTool(node) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -345,7 +363,7 @@ function validateWikipediaTool(node) {
 }
 function validateSearXngTool(node) {
     const issues = [];
-    if (!node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'error',
             nodeId: node.id,
@@ -376,7 +394,7 @@ function validateWolframAlphaTool(node) {
             code: 'MISSING_CREDENTIALS'
         });
     }
-    if (!node.parameters.description && !node.parameters.toolDescription) {
+    if (!getToolDescription(node)) {
         issues.push({
             severity: 'info',
             nodeId: node.id,
