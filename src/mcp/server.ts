@@ -1574,6 +1574,10 @@ export class N8NDocumentationMCPServer {
         if (!this.repository) throw new Error('Repository not initialized');
         return n8nHandlers.handleDeployTemplate(args, this.templateService, this.repository, this.instanceContext);
 
+      // Chatwoot Integration Tools (fork-specific)
+      case 'chatwoot_doctor':
+        return chatwootHandlers.handleChatwootDoctor(args, this.instanceContext);
+
       case 'n8n_manage_datatable': {
         this.validateToolParams(name, args, ['action']);
         const dtAction = args.action;
@@ -1659,10 +1663,6 @@ export class N8NDocumentationMCPServer {
             '- Automatic validation and error correction'
         };
       }
-
-      // Chatwoot Integration Tools
-      case 'chatwoot_doctor':
-        return chatwootHandlers.handleChatwootDoctor(args, this.instanceContext);
 
       default:
         throw new Error(`Unknown tool: ${name}`);

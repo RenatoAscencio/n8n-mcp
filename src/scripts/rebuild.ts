@@ -125,7 +125,7 @@ async function rebuild() {
   
   console.log(`💾 Save completed: ${saved} nodes saved successfully`);
 
-  // Register Chatwoot community nodes
+  // Register Chatwoot community nodes (fork-specific)
   try {
     const { registerChatwootNodes } = await import('../integrations/chatwoot/chatwoot-node-catalog');
     const chatwootCount = registerChatwootNodes(repository);
