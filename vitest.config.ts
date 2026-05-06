@@ -12,11 +12,16 @@ export default defineConfig({
       NODE_ENV: 'test'
     },
     // Test execution settings
-    pool: 'threads',
+    // Using 'forks' pool instead of 'threads' to avoid Node.js crashes on
+    // Node 25.x when native addons (better-sqlite3) are loaded in worker_threads.
+    // The 'forks' pool runs each worker as a subprocess, which isolates native
+    // module loading and prevents dyld/libuv crashes on macOS with Node 25+.
+    pool: 'forks',
     poolOptions: {
-      threads: {
-        maxThreads: parseInt(process.env.TEST_MAX_WORKERS || '4', 10),
-        minThreads: 1
+      forks: {
+        singleFork: process.env.TEST_PARALLEL !== 'true',
+        maxForks: parseInt(process.env.TEST_MAX_WORKERS || '4', 10),
+        minForks: 1
       }
     },
     // No retries - flaky tests should be fixed, not masked

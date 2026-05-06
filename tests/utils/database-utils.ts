@@ -107,14 +107,52 @@ export async function createTestDatabase(options: TestDatabaseOptions = {}): Pro
 }
 
 /**
+ * Strips FTS5-related DDL statements from a SQL schema string.
+ * Used when the database adapter does not support FTS5 (e.g., sql.js).
+ * Removes CREATE VIRTUAL TABLE ... USING fts5(...) blocks and any
+ * CREATE TRIGGER statements that reference FTS5 tables.
+ */
+export function stripFTS5Statements(sql: string): string {
+  // Remove CREATE VIRTUAL TABLE ... USING fts5(...); blocks (multi-line)
+  let result = sql.replace(
+    /CREATE\s+VIRTUAL\s+TABLE\s+IF\s+NOT\s+EXISTS\s+\w+\s+USING\s+fts5\s*\([^;]*\)\s*;/gis,
+    '-- FTS5 table removed (not supported by sql.js)'
+  );
+
+  // Remove CREATE TRIGGER blocks that write to FTS5 tables (*_fts)
+  result = result.replace(
+    /CREATE\s+TRIGGER\s+IF\s+NOT\s+EXISTS\s+\w+_fts_\w+[\s\S]*?END\s*;/gi,
+    '-- FTS5 trigger removed (not supported by sql.js)'
+  );
+
+  return result;
+}
+
+/**
+ * Safely executes a SQL schema string against a database adapter.
+ * Automatically strips FTS5 DDL statements when the adapter does not support FTS5.
+ */
+export function safeExecSchema(adapter: DatabaseAdapter, sql: string): void {
+  const hasFTS5 = adapter.checkFTS5Support();
+  const safeSQL = hasFTS5 ? sql : stripFTS5Statements(sql);
+  adapter.exec(safeSQL);
+}
+
+/**
  * Initializes database schema from SQL file
  */
 export async function initializeDatabaseSchema(adapter: DatabaseAdapter, enableFTS5 = false): Promise<void> {
   const schemaPath = path.join(__dirname, '../../src/database/schema.sql');
   const schema = fs.readFileSync(schemaPath, 'utf-8');
-  
+
+  // Check FTS5 support - sql.js does not support FTS5
+  const hasFTS5 = adapter.checkFTS5Support();
+
+  // Strip FTS5 DDL when the adapter does not support it
+  const schemaToRun = hasFTS5 ? schema : stripFTS5Statements(schema);
+
   // Execute main schema
-  adapter.exec(schema);
+  adapter.exec(schemaToRun);
   
   // Optionally initialize FTS5 tables
   if (enableFTS5 && adapter.checkFTS5Support()) {

@@ -243,16 +243,29 @@ class N8NDocumentationMCPServer {
             return;
         const schemaPath = path_1.default.join(__dirname, '../../src/database/schema.sql');
         const schema = await fs_1.promises.readFile(schemaPath, 'utf-8');
+        const hasFTS5 = this.db.checkFTS5Support();
         const statements = this.parseSQLStatements(schema);
         for (const statement of statements) {
-            if (statement.trim()) {
-                try {
-                    this.db.exec(statement);
+            const trimmed = statement.trim();
+            if (!trimmed)
+                continue;
+            if (!hasFTS5) {
+                const upper = trimmed.toUpperCase();
+                if (upper.startsWith('CREATE VIRTUAL TABLE') && upper.includes('USING FTS5')) {
+                    logger_1.logger.debug('Skipping FTS5 virtual table (not supported by current adapter)');
+                    continue;
                 }
-                catch (error) {
-                    logger_1.logger.error(`Failed to execute SQL statement: ${statement.substring(0, 100)}...`, error);
-                    throw error;
+                if (upper.startsWith('CREATE TRIGGER') && upper.includes('_FTS')) {
+                    logger_1.logger.debug('Skipping FTS5 trigger (not supported by current adapter)');
+                    continue;
                 }
+            }
+            try {
+                this.db.exec(trimmed);
+            }
+            catch (error) {
+                logger_1.logger.error(`Failed to execute SQL statement: ${trimmed.substring(0, 100)}...`, error);
+                throw error;
             }
         }
     }

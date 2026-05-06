@@ -138,9 +138,14 @@ async function rebuild() {
     catch (error) {
         console.warn('⚠️  Could not register Chatwoot nodes:', error.message);
     }
-    console.log('\n🔍 Rebuilding FTS5 search index...');
-    db.prepare("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')").run();
-    console.log('✅ FTS5 index rebuilt successfully');
+    if (db.checkFTS5Support()) {
+        console.log('\n🔍 Rebuilding FTS5 search index...');
+        db.prepare("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')").run();
+        console.log('✅ FTS5 index rebuilt successfully');
+    }
+    else {
+        console.log('\n⚠️  FTS5 not supported by current adapter, skipping index rebuild');
+    }
     console.log('\n🔍 Running validation checks...');
     try {
         const validationResults = validateDatabase(repository);
