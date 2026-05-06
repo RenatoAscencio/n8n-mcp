@@ -13,8 +13,8 @@ permissions:
   issues: write
   pull-requests: write
 
-# Prevent concurrent Docker pushes across all workflows (shared with docker-build.yml)
-# This ensures release.yml and docker-build.yml never push to 'latest' simultaneously
+# Prevent concurrent Docker pushes across all workflows (shared with docker-publish.yml)
+# This ensures release.yml and docker-publish.yml never push to 'latest' simultaneously
 concurrency:
   group: docker-push-${{ github.ref }}
   cancel-in-progress: false
