@@ -146,3 +146,6 @@ ui-apps/node_modules/
 # Telemetry configuration (user-specific)
 ~/.n8n-mcp/
 :memory:
+
+# AI assistant project instructions (personal/local only)
+CLAUDE.md
