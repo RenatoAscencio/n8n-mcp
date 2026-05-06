@@ -149,3 +149,12 @@ ui-apps/node_modules/
 
 # AI assistant project instructions (personal/local only)
 CLAUDE.md
+
+# Fork-only private deployment artifacts (TVPlus / Convo.chat infra)
+.env.tvplus*
+docker-compose.tvplus.yml
+MCP_SMOKE.md
+N8N_WORKFLOW_SMOKE.md
+WORKFLOW_BUILDER_RULES.md
+workflows/
+docs/RUNBOOK-MCP-HTTP.md

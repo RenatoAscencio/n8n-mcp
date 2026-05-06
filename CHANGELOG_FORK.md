@@ -29,7 +29,6 @@ Versioning: `v<upstream-version>-chatwoot.<n>` where:
 - **`@renatoascencio/n8n-nodes-chatwoot` registered in nodes.db** — 2 nodes (Chatwoot, Chatwoot Trigger) discoverable via MCP catalog
 - **Chatwoot connection validator** — graceful degradation, hardened error messages
 - **5 Chatwoot workflow templates** — pre-built examples for common use cases
-- **TVPlus MCP operator kit** — compose, rules, smoke tests
 - **Multi-arch Docker support** (amd64 + arm64) via `docker-publish.yml`
 - **Docker MCP Toolkit metadata labels** for image discoverability
 
