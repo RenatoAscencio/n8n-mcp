@@ -11,7 +11,9 @@ export declare class N8nApiClient {
     private baseUrl;
     private versionInfo;
     private versionPromise;
+    private pinnedAgentsPromise;
     constructor(config: N8nApiClientConfig);
+    private getPinnedAgents;
     getVersion(): Promise<N8nVersionInfo | null>;
     private fetchVersionOnce;
     getCachedVersionInfo(): N8nVersionInfo | null;
@@ -54,6 +56,7 @@ export declare class N8nApiClient {
     createDataTable(params: {
         name: string;
         columns?: DataTableColumn[];
+        projectId?: string;
     }): Promise<DataTable>;
     listDataTables(params?: DataTableListParams): Promise<{
         data: DataTable[];

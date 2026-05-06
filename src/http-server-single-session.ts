@@ -11,7 +11,8 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { N8NDocumentationMCPServer } from './mcp/server';
 import { ConsoleManager } from './utils/console-manager';
 import { logger } from './utils/logger';
-import { AuthManager } from './utils/auth';
+import { redactHeaders, summarizeMcpBody } from './utils/redaction';
+import { AuthManager, buildBearerChallenge } from './utils/auth';
 import { readFileSync } from 'fs';
 import dotenv from 'dotenv';
 import { getStartupBaseUrl, formatEndpointUrls, detectBaseUrl } from './utils/url-detector';
@@ -338,6 +339,7 @@ export class SingleSessionHTTPServer {
         userAgent: req.get('user-agent'),
         reason
       });
+      res.setHeader('WWW-Authenticate', buildBearerChallenge(reason));
       res.status(401).json({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Unauthorized' },
@@ -355,6 +357,7 @@ export class SingleSessionHTTPServer {
         userAgent: req.get('user-agent'),
         reason: 'invalid_token'
       });
+      res.setHeader('WWW-Authenticate', buildBearerChallenge('invalid_token'));
       res.status(401).json({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Unauthorized' },
@@ -557,14 +560,13 @@ export class SingleSessionHTTPServer {
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
         const isInitialize = req.body ? isInitializeRequest(req.body) : false;
 
-        // Log comprehensive incoming request details for debugging
+        // SECURITY (GHSA-pfm2-2mhg-8wpx): log body summary only, not payload.
         logger.info('handleRequest: Processing MCP request - SDK PATTERN', {
           requestId: req.get('x-request-id') || 'unknown',
           sessionId: sessionId,
           method: req.method,
           url: req.url,
-          bodyType: typeof req.body,
-          bodyContent: req.body ? JSON.stringify(req.body, null, 2) : 'undefined',
+          body: summarizeMcpBody(req.body),
           existingTransports: Object.keys(this.transports),
           isInitializeRequest: isInitialize
         });
@@ -1270,23 +1272,6 @@ export class SingleSessionHTTPServer {
 
     // Main MCP endpoint with authentication and rate limiting
     app.post('/mcp', authLimiter, jsonParser, async (req: express.Request, res: express.Response): Promise<void> => {
-      // Log comprehensive debug info about the request
-      logger.info('POST /mcp request received - DETAILED DEBUG', {
-        headers: req.headers,
-        readable: req.readable,
-        readableEnded: req.readableEnded,
-        complete: req.complete,
-        bodyType: typeof req.body,
-        bodyContent: req.body ? JSON.stringify(req.body, null, 2) : 'undefined',
-        contentLength: req.get('content-length'),
-        contentType: req.get('content-type'),
-        userAgent: req.get('user-agent'),
-        ip: req.ip,
-        method: req.method,
-        url: req.url,
-        originalUrl: req.originalUrl
-      });
-      
       // Handle connection close to immediately clean up sessions
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       // Only add event listener if the request object supports it (not in test mocks)
@@ -1320,7 +1305,14 @@ export class SingleSessionHTTPServer {
       
       if (!this.authenticateRequest(req, res)) return;
 
-      logger.info('Authentication successful - proceeding to handleRequest', {
+      // SECURITY (GHSA-pfm2-2mhg-8wpx): redacted summary only, post-auth.
+      logger.debug('POST /mcp authenticated', {
+        ip: req.ip,
+        userAgent: req.get('user-agent'),
+        contentType: req.get('content-type'),
+        contentLength: req.get('content-length'),
+        headers: redactHeaders(req.headers),
+        body: summarizeMcpBody(req.body),
         activeSessions: this.getActiveSessionCount()
       });
 

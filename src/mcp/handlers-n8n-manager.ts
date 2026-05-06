@@ -12,6 +12,7 @@ import {
   McpToolResponse,
   ExecutionFilterOptions,
   ExecutionMode,
+  Credential,
 } from '../types/n8n-api';
 import type { TriggerType, TestWorkflowInput } from '../triggers/types';
 import {
@@ -371,12 +372,29 @@ function ensureApiConfigured(context?: InstanceContext): N8nApiClient {
   return client;
 }
 
+// MCP transports may serialize JSON objects/arrays as strings.
+// Parse them back, but return the original value on failure so Zod reports a proper type error.
+export function tryParseJson(val: unknown): unknown {
+  if (typeof val !== 'string') return val;
+  try { return JSON.parse(val); } catch { return val; }
+}
+
+// Some MCP clients (e.g. opencode) serialize all schema fields including optional ones,
+// sending '' instead of omitting them. Coerce blank strings to undefined so the n8n API
+// doesn't receive `?cursor=&projectId=` and reject the request. See issue #774.
+const emptyToUndefined = (v: unknown) =>
+  typeof v === 'string' && v.trim() === '' ? undefined : v;
+const optionalEmptyAware = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess(emptyToUndefined, schema.optional());
+
 // Zod schemas for input validation
 const createWorkflowSchema = z.object({
   name: z.string(),
-  nodes: z.array(z.any()),
-  connections: z.record(z.any()),
-  settings: z.object({
+  nodes: z.preprocess(tryParseJson, z.array(z.any())),
+  // Two-arg z.record(keySchema, valueSchema) — see services/n8n-validation.ts for the
+  // Zod 3/4 compatibility rationale (#744).
+  connections: z.preprocess(tryParseJson, z.record(z.string(), z.any())),
+  settings: z.preprocess(tryParseJson, z.object({
     executionOrder: z.enum(['v0', 'v1']).optional(),
     timezone: z.string().optional(),
     saveDataErrorExecution: z.enum(['all', 'none']).optional(),
@@ -385,26 +403,26 @@ const createWorkflowSchema = z.object({
     saveExecutionProgress: z.boolean().optional(),
     executionTimeout: z.number().optional(),
     errorWorkflow: z.string().optional(),
-  }).optional(),
+  })).optional(),
   projectId: z.string().optional(),
 });
 
 const updateWorkflowSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
-  nodes: z.array(z.any()).optional(),
-  connections: z.record(z.any()).optional(),
-  settings: z.any().optional(),
+  nodes: z.preprocess(tryParseJson, z.array(z.any())).optional(),
+  connections: z.preprocess(tryParseJson, z.record(z.string(), z.any())).optional(),
+  settings: z.preprocess(tryParseJson, z.any()).optional(),
   createBackup: z.boolean().optional(),
   intent: z.string().optional(),
 });
 
 const listWorkflowsSchema = z.object({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
+  cursor: optionalEmptyAware(z.string()),
   active: z.boolean().optional(),
-  tags: z.array(z.string()).optional(),
-  projectId: z.string().optional(),
+  tags: z.preprocess(tryParseJson, z.array(z.string())).optional(),
+  projectId: optionalEmptyAware(z.string()),
   excludePinnedData: z.boolean().optional(),
 });
 
@@ -443,11 +461,11 @@ const autofixWorkflowSchema = z.object({
 // Schema for n8n_test_workflow tool
 const testWorkflowSchema = z.object({
   workflowId: z.string(),
-  triggerType: z.enum(['webhook', 'form', 'chat']).optional(),
-  httpMethod: z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
-  webhookPath: z.string().optional(),
-  message: z.string().optional(),
-  sessionId: z.string().optional(),
+  triggerType: optionalEmptyAware(z.enum(['webhook', 'form', 'chat'])),
+  httpMethod: optionalEmptyAware(z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
+  webhookPath: optionalEmptyAware(z.string()),
+  message: optionalEmptyAware(z.string()),
+  sessionId: optionalEmptyAware(z.string()),
   data: z.record(z.unknown()).optional(),
   headers: z.record(z.string()).optional(),
   timeout: z.number().optional(),
@@ -456,10 +474,10 @@ const testWorkflowSchema = z.object({
 
 const listExecutionsSchema = z.object({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
-  workflowId: z.string().optional(),
-  projectId: z.string().optional(),
-  status: z.enum(['success', 'error', 'waiting']).optional(),
+  cursor: optionalEmptyAware(z.string()),
+  workflowId: optionalEmptyAware(z.string()),
+  projectId: optionalEmptyAware(z.string()),
+  status: optionalEmptyAware(z.enum(['success', 'error', 'waiting'])),
   includeData: z.boolean().optional(),
 });
 
@@ -2645,7 +2663,7 @@ export async function handleDeployTemplate(
 export async function handleTriggerWebhookWorkflow(args: unknown, context?: InstanceContext): Promise<McpToolResponse> {
   const triggerWebhookSchema = z.object({
     webhookUrl: z.string().url(),
-    httpMethod: z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
+    httpMethod: optionalEmptyAware(z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
     data: z.record(z.unknown()).optional(),
     headers: z.record(z.string()).optional(),
     waitForResponse: z.boolean().optional(),
@@ -2744,24 +2762,18 @@ const createTableSchema = z.object({
   columns: z.array(z.object({
     name: z.string().min(1, 'Column name cannot be empty'),
     type: z.enum(['string', 'number', 'boolean', 'date']).optional(),
-  })).optional(),
+  })).min(1, 'At least one column is required'),
+  projectId: optionalEmptyAware(z.string()),
 });
 
 const listTablesSchema = z.object({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
+  cursor: optionalEmptyAware(z.string()),
 });
 
 const updateTableSchema = tableIdSchema.extend({
   name: z.string().min(1, 'New table name cannot be empty'),
 });
-
-// MCP transports may serialize JSON objects/arrays as strings.
-// Parse them back, but return the original value on failure so Zod reports a proper type error.
-export function tryParseJson(val: unknown): unknown {
-  if (typeof val !== 'string') return val;
-  try { return JSON.parse(val); } catch { return val; }
-}
 
 const coerceJsonArray = z.preprocess(tryParseJson, z.array(z.record(z.unknown())));
 const coerceJsonObject = z.preprocess(tryParseJson, z.record(z.unknown()));
@@ -2769,10 +2781,10 @@ const coerceJsonFilter = z.preprocess(tryParseJson, dataTableFilterSchema);
 
 const getRowsSchema = tableIdSchema.extend({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
+  cursor: optionalEmptyAware(z.string()),
   filter: z.union([coerceJsonFilter, z.string()]).optional(),
-  sortBy: z.string().optional(),
-  search: z.string().optional(),
+  sortBy: optionalEmptyAware(z.string()),
+  search: optionalEmptyAware(z.string()),
 });
 
 const insertRowsSchema = tableIdSchema.extend({
@@ -2965,9 +2977,17 @@ export async function handleDeleteRows(args: unknown, context?: InstanceContext)
       ...params,
     };
     const result = await client.deleteDataTableRows(tableId, queryParams as any);
+
+    // Strip meaningless all-null "after" rows from dryRun responses — after a
+    // delete there is no "after" state, so the template row with null fields
+    // surfaces as noise for callers (QA #10).
+    const cleanedResult = params.dryRun && Array.isArray(result)
+      ? result.filter((row: any) => row?.dryRunState !== 'after')
+      : result;
+
     return {
       success: true,
-      data: result,
+      data: cleanedResult,
       message: params.dryRun ? 'Dry run: rows matched for deletion (no changes applied)' : 'Rows deleted successfully',
     };
   } catch (error) {
@@ -2982,11 +3002,52 @@ export async function handleDeleteRows(args: unknown, context?: InstanceContext)
 // SECURITY: Never log credential data values (they contain secrets like API keys, passwords).
 // Only log credential name, type, and ID.
 
-const listCredentialsSchema = z.object({}).passthrough();
+const listCredentialsSchema = z.object({
+  includeUsage: z.boolean().optional(),
+}).passthrough();
 
 const getCredentialSchema = z.object({
   id: z.string({ required_error: 'Credential ID is required' }),
+  includeUsage: z.boolean().optional(),
 });
+
+interface CredentialUsageEntry {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
+async function buildCredentialUsageMap(
+  client: N8nApiClient
+): Promise<Map<string, CredentialUsageEntry[]>> {
+  const usage = new Map<string, CredentialUsageEntry[]>();
+  const workflows = await client.listAllWorkflows();
+  for (const wf of workflows) {
+    if (!wf.id) continue;
+    const entry: CredentialUsageEntry = {
+      id: wf.id,
+      name: wf.name,
+      active: wf.active ?? false,
+    };
+    const seenForThisWorkflow = new Set<string>();
+    for (const node of wf.nodes ?? []) {
+      if (!node.credentials) continue;
+      for (const credConfig of Object.values(node.credentials)) {
+        const credId = (credConfig as { id?: unknown } | null)?.id;
+        if (typeof credId !== 'string' || credId === '') continue;
+        if (seenForThisWorkflow.has(credId)) continue;
+        seenForThisWorkflow.add(credId);
+        const list = usage.get(credId);
+        if (list) {
+          list.push(entry);
+        } else {
+          usage.set(credId, [entry]);
+        }
+      }
+    }
+  }
+  return usage;
+}
 
 const createCredentialSchema = z.object({
   name: z.string({ required_error: 'Credential name is required' }),
@@ -3009,17 +3070,38 @@ const getCredentialSchemaTypeSchema = z.object({
   type: z.string({ required_error: 'Credential type is required' }),
 });
 
+type CredentialWithUsage = Credential & {
+  usedIn?: CredentialUsageEntry[];
+  usageCount?: number;
+};
+
 export async function handleListCredentials(args: unknown, context?: InstanceContext): Promise<McpToolResponse> {
   try {
     const client = ensureApiConfigured(context);
-    listCredentialsSchema.parse(args);
+    const { includeUsage } = listCredentialsSchema.parse(args);
     const result = await client.listCredentials();
+    let credentials: CredentialWithUsage[] = result.data;
+    let usageScanError: string | undefined;
+    if (includeUsage) {
+      try {
+        const usageMap = await buildCredentialUsageMap(client);
+        credentials = result.data.map((cred) => {
+          const usedIn = (cred.id ? usageMap.get(cred.id) : undefined) ?? [];
+          return { ...cred, usedIn, usageCount: usedIn.length };
+        });
+      } catch (scanError) {
+        // Degrade gracefully: still return the base credential list rather than
+        // failing the whole call when only the workflow scan failed.
+        usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+      }
+    }
     return {
       success: true,
       data: {
-        credentials: result.data,
-        count: result.data.length,
+        credentials,
+        count: credentials.length,
         nextCursor: result.nextCursor || undefined,
+        ...(usageScanError ? { usageScanError } : {}),
       },
     };
   } catch (error) {
@@ -3030,7 +3112,7 @@ export async function handleListCredentials(args: unknown, context?: InstanceCon
 export async function handleGetCredential(args: unknown, context?: InstanceContext): Promise<McpToolResponse> {
   try {
     const client = ensureApiConfigured(context);
-    const { id } = getCredentialSchema.parse(args);
+    const { id, includeUsage } = getCredentialSchema.parse(args);
     let credential;
     try {
       credential = await client.getCredential(id);
@@ -3050,21 +3132,82 @@ export async function handleGetCredential(args: unknown, context?: InstanceConte
     }
     // Strip sensitive data field — defense in depth against future n8n versions returning decrypted values
     const { data: _sensitiveData, ...safeCred } = credential;
+    let enriched: CredentialWithUsage = safeCred;
+    let usageScanError: string | undefined;
+    if (includeUsage) {
+      try {
+        const usageMap = await buildCredentialUsageMap(client);
+        const usedIn = usageMap.get(id) ?? [];
+        enriched = { ...safeCred, usedIn, usageCount: usedIn.length };
+      } catch (scanError) {
+        usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+      }
+    }
     return {
       success: true,
-      data: safeCred,
+      data: usageScanError ? { ...enriched, usageScanError } : enriched,
     };
   } catch (error) {
     return handleCrudError(error);
   }
 }
 
+/**
+ * Workaround for n8n's oAuth2Api credential schema (#740).
+ *
+ * The upstream Ajv schema has two interacting bugs that make `clientCredentials`
+ * grant unusable as-is:
+ *   1. `additionalProperties: false` at the root with `useDynamicClientRegistration`
+ *      missing from `properties`, so sending it triggers an "additional property"
+ *      rejection.
+ *   2. The `if/then/else` on `useDynamicClientRegistration` uses
+ *      `properties.x.enum` to test value, which evaluates true vacuously when the
+ *      field is absent — so both `then` branches fire simultaneously, and `serverUrl`
+ *      (a Dynamic Client Registration field) becomes required even on plain
+ *      client-credentials flows that have no DCR involvement.
+ *
+ * The shim normalizes data for that specific combination so the Ajv schema is
+ * satisfied: strip the rejected `useDynamicClientRegistration` field, inject
+ * the `sendAdditionalBodyProperties` / `additionalBodyProperties` defaults
+ * the schema's grant-type `then` branch requires, and inject `serverUrl: ''`
+ * to satisfy the spuriously-fired DCR `then` branch.
+ *
+ * Filed upstream against n8n. Remove this shim when their schema is fixed.
+ */
+function applyCredentialDataShims(
+  type: string,
+  data: Record<string, any> | undefined
+): Record<string, any> | undefined {
+  if (!data || type !== 'oAuth2Api' || data.grantType !== 'clientCredentials') {
+    return data;
+  }
+  const shimmed: Record<string, any> = { ...data };
+  if ('useDynamicClientRegistration' in shimmed && !shimmed.useDynamicClientRegistration) {
+    delete shimmed.useDynamicClientRegistration;
+  }
+  if (!('sendAdditionalBodyProperties' in shimmed)) {
+    shimmed.sendAdditionalBodyProperties = false;
+  }
+  if (!('additionalBodyProperties' in shimmed)) {
+    shimmed.additionalBodyProperties = '';
+  }
+  // Only inject serverUrl when the DCR branch fires spuriously (DCR is absent/false).
+  // If the caller explicitly opted into DCR (true), let n8n surface a real
+  // "missing serverUrl" error rather than masking it with our empty-string default.
+  const dcrActive = shimmed.useDynamicClientRegistration === true;
+  if (!dcrActive && !('serverUrl' in shimmed)) {
+    shimmed.serverUrl = '';
+  }
+  return shimmed;
+}
+
 export async function handleCreateCredential(args: unknown, context?: InstanceContext): Promise<McpToolResponse> {
   try {
     const client = ensureApiConfigured(context);
     const { name, type, data } = createCredentialSchema.parse(args);
+    const shimmedData = applyCredentialDataShims(type, data);
     logger.info(`Creating credential: name="${name}", type="${type}"`);
-    const credential = await client.createCredential({ name, type, data });
+    const credential = await client.createCredential({ name, type, data: shimmedData });
     const { data: _sensitiveData, ...safeCred } = credential;
     return {
       success: true,
@@ -3084,7 +3227,26 @@ export async function handleUpdateCredential(args: unknown, context?: InstanceCo
     const updatePayload: Record<string, any> = {};
     if (name !== undefined) updatePayload.name = name;
     if (type !== undefined) updatePayload.type = type;
-    if (data !== undefined) updatePayload.data = data;
+    // Apply the same oAuth2 clientCredentials shim as the create path (#740) — n8n's
+    // schema rejects the same payload shape on update, so re-saving an existing
+    // credential would re-trigger the bug without this. When the caller omits `type`
+    // (common partial-update pattern) but `data.grantType === 'clientCredentials'`,
+    // fetch the existing credential to derive its type — otherwise the shim would
+    // silently skip and the update would fail.
+    if (data !== undefined) {
+      let derivedType = type;
+      if (derivedType === undefined && data?.grantType === 'clientCredentials') {
+        try {
+          const existing = await client.getCredential(id);
+          derivedType = existing?.type;
+        } catch {
+          // GET /credentials/:id may not be exposed by n8n's public API; falling
+          // back to listCredentials adds a costly round-trip. If the lookup fails,
+          // skip the shim — n8n will surface its own validation error.
+        }
+      }
+      updatePayload.data = applyCredentialDataShims(derivedType ?? '', data);
+    }
     const credential = await client.updateCredential(id, updatePayload);
     const { data: _sensitiveData, ...safeCred } = credential;
     return {
@@ -3151,18 +3313,29 @@ export async function handleAuditInstance(args: unknown, context?: InstanceConte
     // Phase A: n8n built-in audit
     let builtinAudit: any = null;
     let builtinAuditMs = 0;
+    const auditStart = Date.now();
     try {
-      const auditStart = Date.now();
       builtinAudit = await client.generateAudit({
         categories: input.categories,
         daysAbandonedWorkflow: input.daysAbandonedWorkflow,
       });
       builtinAuditMs = Date.now() - auditStart;
     } catch (auditError: any) {
-      builtinAuditMs = Date.now() - totalStart;
-      const msg = auditError?.statusCode === 404
-        ? 'Built-in audit endpoint not available on this n8n version.'
-        : `Built-in audit failed: ${auditError?.message || 'unknown error'}`;
+      builtinAuditMs = Date.now() - auditStart;
+      // Surface HTTP status in the warning so users can tell server-side errors
+      // (n8n internal failures, missing N8N_HOST/N8N_PROTOCOL env, etc.) apart
+      // from client-side ones. Pre-fix the message hid this and the bare
+      // "Invalid URL" string from n8n's response body looked like a client bug. (#736)
+      const status = auditError?.statusCode;
+      const reason = auditError?.message || 'unknown error';
+      let msg: string;
+      if (status === 404) {
+        msg = 'Built-in audit endpoint not available on this n8n version.';
+      } else if (status !== undefined) {
+        msg = `Built-in audit failed (HTTP ${status}): ${reason}`;
+      } else {
+        msg = `Built-in audit failed (no response from n8n): ${reason}`;
+      }
       warnings.push(msg);
       logger.warn(`Audit: ${msg}`);
     }

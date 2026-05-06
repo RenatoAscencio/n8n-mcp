@@ -106,6 +106,7 @@ class WorkflowDiffEngine {
                 if (request.validateOnly) {
                     return {
                         success: errors.length === 0,
+                        workflow: workflowCopy,
                         message: errors.length === 0
                             ? 'Validation successful. All operations are valid.'
                             : `Validation completed with ${errors.length} errors.`,
@@ -205,6 +206,7 @@ class WorkflowDiffEngine {
                 if (request.validateOnly) {
                     return {
                         success: true,
+                        workflow: workflowCopy,
                         message: 'Validation successful. Operations are valid but not applied.'
                     };
                 }
@@ -471,9 +473,20 @@ class WorkflowDiffEngine {
         return null;
     }
     validateMoveNode(workflow, operation) {
+        const operationAny = operation;
+        if (operationAny.newPosition !== undefined) {
+            return `Invalid parameter 'newPosition' for moveNode. Did you mean 'position'? Example: {type: "moveNode", nodeName: "My Node", position: [450, 600]}`;
+        }
         const node = this.findNode(workflow, operation.nodeId, operation.nodeName);
         if (!node) {
             return this.formatNodeNotFoundError(workflow, operation.nodeId || operation.nodeName || '', 'moveNode');
+        }
+        if (!operation.position) {
+            return `Missing required parameter 'position' for moveNode. Example: {type: "moveNode", nodeName: "${node.name}", position: [450, 600]}`;
+        }
+        if (!Array.isArray(operation.position) || operation.position.length !== 2 ||
+            typeof operation.position[0] !== 'number' || typeof operation.position[1] !== 'number') {
+            return `Invalid 'position' for moveNode. Must be [x, y] with two numbers. Got: ${JSON.stringify(operation.position)}`;
         }
         return null;
     }
@@ -515,12 +528,12 @@ class WorkflowDiffEngine {
                 .join(', ');
             return `Target node not found: "${operation.target}". Available nodes: ${availableNodes}. Tip: Use node ID for names with special characters (apostrophes, quotes).`;
         }
-        const sourceOutput = operation.sourceOutput || 'main';
+        const { sourceOutput, sourceIndex } = this.resolveSmartParameters(workflow, operation, { silent: true });
         const existing = workflow.connections[sourceNode.name]?.[sourceOutput];
         if (existing) {
-            const hasConnection = existing.some(connections => connections.some(c => c.node === targetNode.name));
-            if (hasConnection) {
-                return `Connection already exists from "${sourceNode.name}" to "${targetNode.name}"`;
+            const slot = existing[sourceIndex];
+            if (Array.isArray(slot) && slot.some(c => c.node === targetNode.name)) {
+                return `Connection already exists from "${sourceNode.name}" (output "${sourceOutput}", index ${sourceIndex}) to "${targetNode.name}"`;
             }
         }
         return null;
@@ -561,6 +574,9 @@ class WorkflowDiffEngine {
         return null;
     }
     validateRewireConnection(workflow, operation) {
+        if (operation.from === operation.to) {
+            return `rewireConnection: "from" and "to" must refer to different nodes (got "${operation.from}" for both).`;
+        }
         const sourceNode = this.findNode(workflow, operation.source, operation.source);
         if (!sourceNode) {
             const availableNodes = workflow.nodes
@@ -582,7 +598,7 @@ class WorkflowDiffEngine {
                 .join(', ');
             return `"To" node not found: "${operation.to}". Available nodes: ${availableNodes}. Tip: Use node ID for names with special characters.`;
         }
-        const { sourceOutput, sourceIndex } = this.resolveSmartParameters(workflow, operation);
+        const { sourceOutput, sourceIndex } = this.resolveSmartParameters(workflow, operation, { silent: true });
         const connections = workflow.connections[sourceNode.name]?.[sourceOutput];
         if (!connections) {
             return `No connections found from "${sourceNode.name}" on output "${sourceOutput}"`;
@@ -744,7 +760,7 @@ class WorkflowDiffEngine {
             return;
         node.disabled = true;
     }
-    resolveSmartParameters(workflow, operation) {
+    resolveSmartParameters(workflow, operation, options = {}) {
         const sourceNode = this.findNode(workflow, operation.source, operation.source);
         let sourceOutput = String(operation.sourceOutput ?? 'main');
         let sourceIndex = operation.sourceIndex ?? 0;
@@ -763,7 +779,7 @@ class WorkflowDiffEngine {
         if (operation.case !== undefined && operation.sourceIndex === undefined) {
             sourceIndex = operation.case;
         }
-        if (sourceNode && operation.sourceIndex !== undefined && operation.branch === undefined && operation.case === undefined) {
+        if (!options.silent && sourceNode && operation.sourceIndex !== undefined && operation.branch === undefined && operation.case === undefined) {
             if (sourceNode.type === 'n8n-nodes-base.if') {
                 this.warnings.push({
                     operation: -1,
@@ -835,23 +851,52 @@ class WorkflowDiffEngine {
         }
     }
     applyRewireConnection(workflow, operation) {
+        const sourceNode = this.findNode(workflow, operation.source, operation.source);
+        const fromNode = this.findNode(workflow, operation.from, operation.from);
+        const toNode = this.findNode(workflow, operation.to, operation.to);
+        if (!sourceNode || !fromNode || !toNode) {
+            throw new Error(`rewireConnection: unresolved node reference(s). ` +
+                `source=${JSON.stringify(operation.source)} (${sourceNode ? 'ok' : 'missing'}), ` +
+                `from=${JSON.stringify(operation.from)} (${fromNode ? 'ok' : 'missing'}), ` +
+                `to=${JSON.stringify(operation.to)} (${toNode ? 'ok' : 'missing'}). ` +
+                `Available nodes: ${workflow.nodes.map(n => `"${n.name}" (${n.id})`).join(', ')}`);
+        }
+        if (fromNode.id === toNode.id) {
+            throw new Error(`rewireConnection: "from" and "to" resolve to the same node "${fromNode.name}" (id: ${fromNode.id}). ` +
+                `A rewire requires a distinct target.`);
+        }
         const { sourceOutput, sourceIndex } = this.resolveSmartParameters(workflow, operation);
+        const totalFromEdges = () => {
+            const slots = workflow.connections[sourceNode.name]?.[sourceOutput] ?? [];
+            return slots.reduce((acc, slot) => acc + (slot ?? []).filter(c => c.node === fromNode.name).length, 0);
+        };
+        const fromEdgesBefore = totalFromEdges();
+        const toAlreadyPresent = (workflow.connections[sourceNode.name]?.[sourceOutput]?.[sourceIndex] ?? [])
+            .some(c => c.node === toNode.name);
         this.applyRemoveConnection(workflow, {
             type: 'removeConnection',
-            source: operation.source,
-            target: operation.from,
+            source: sourceNode.name,
+            target: fromNode.name,
             sourceOutput: sourceOutput,
             targetInput: operation.targetInput
         });
-        this.applyAddConnection(workflow, {
-            type: 'addConnection',
-            source: operation.source,
-            target: operation.to,
-            sourceOutput: sourceOutput,
-            targetInput: operation.targetInput,
-            sourceIndex: sourceIndex,
-            targetIndex: 0
-        });
+        if (!toAlreadyPresent) {
+            this.applyAddConnection(workflow, {
+                type: 'addConnection',
+                source: sourceNode.name,
+                target: toNode.name,
+                sourceOutput: sourceOutput,
+                targetInput: operation.targetInput,
+                sourceIndex: sourceIndex,
+                targetIndex: 0
+            });
+        }
+        const fromEdgesAfter = totalFromEdges();
+        if (fromEdgesBefore > 0 && fromEdgesAfter !== 0) {
+            throw new Error(`rewireConnection invariant violated: "${sourceNode.name}" → "${fromNode.name}" ` +
+                `edges should have been removed (had ${fromEdgesBefore}, still have ${fromEdgesAfter}). ` +
+                `Refusing to commit a corrupted connection map.`);
+        }
     }
     applyUpdateSettings(workflow, operation) {
         if (operation.settings && Object.keys(operation.settings).length > 0) {
@@ -894,9 +939,11 @@ class WorkflowDiffEngine {
     }
     applyActivateWorkflow(workflow, operation) {
         workflow._shouldActivate = true;
+        workflow._shouldDeactivate = false;
     }
     applyDeactivateWorkflow(workflow, operation) {
         workflow._shouldDeactivate = true;
+        workflow._shouldActivate = false;
     }
     validateTransferWorkflow(_workflow, operation) {
         if (!operation.destinationProjectId) {

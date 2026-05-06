@@ -37,6 +37,7 @@ exports.getInstanceCacheStatistics = getInstanceCacheStatistics;
 exports.getInstanceCacheMetrics = getInstanceCacheMetrics;
 exports.clearInstanceCache = clearInstanceCache;
 exports.getN8nApiClient = getN8nApiClient;
+exports.tryParseJson = tryParseJson;
 exports.handleCreateWorkflow = handleCreateWorkflow;
 exports.handleGetWorkflow = handleGetWorkflow;
 exports.handleGetWorkflowDetails = handleGetWorkflowDetails;
@@ -56,7 +57,6 @@ exports.handleDiagnostic = handleDiagnostic;
 exports.handleWorkflowVersions = handleWorkflowVersions;
 exports.handleDeployTemplate = handleDeployTemplate;
 exports.handleTriggerWebhookWorkflow = handleTriggerWebhookWorkflow;
-exports.tryParseJson = tryParseJson;
 exports.handleCreateTable = handleCreateTable;
 exports.handleListTables = handleListTables;
 exports.handleGetTable = handleGetTable;
@@ -182,11 +182,23 @@ function ensureApiConfigured(context) {
     }
     return client;
 }
+function tryParseJson(val) {
+    if (typeof val !== 'string')
+        return val;
+    try {
+        return JSON.parse(val);
+    }
+    catch {
+        return val;
+    }
+}
+const emptyToUndefined = (v) => typeof v === 'string' && v.trim() === '' ? undefined : v;
+const optionalEmptyAware = (schema) => zod_1.z.preprocess(emptyToUndefined, schema.optional());
 const createWorkflowSchema = zod_1.z.object({
     name: zod_1.z.string(),
-    nodes: zod_1.z.array(zod_1.z.any()),
-    connections: zod_1.z.record(zod_1.z.any()),
-    settings: zod_1.z.object({
+    nodes: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.any())),
+    connections: zod_1.z.preprocess(tryParseJson, zod_1.z.record(zod_1.z.string(), zod_1.z.any())),
+    settings: zod_1.z.preprocess(tryParseJson, zod_1.z.object({
         executionOrder: zod_1.z.enum(['v0', 'v1']).optional(),
         timezone: zod_1.z.string().optional(),
         saveDataErrorExecution: zod_1.z.enum(['all', 'none']).optional(),
@@ -195,24 +207,24 @@ const createWorkflowSchema = zod_1.z.object({
         saveExecutionProgress: zod_1.z.boolean().optional(),
         executionTimeout: zod_1.z.number().optional(),
         errorWorkflow: zod_1.z.string().optional(),
-    }).optional(),
+    })).optional(),
     projectId: zod_1.z.string().optional(),
 });
 const updateWorkflowSchema = zod_1.z.object({
     id: zod_1.z.string(),
     name: zod_1.z.string().optional(),
-    nodes: zod_1.z.array(zod_1.z.any()).optional(),
-    connections: zod_1.z.record(zod_1.z.any()).optional(),
-    settings: zod_1.z.any().optional(),
+    nodes: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.any())).optional(),
+    connections: zod_1.z.preprocess(tryParseJson, zod_1.z.record(zod_1.z.string(), zod_1.z.any())).optional(),
+    settings: zod_1.z.preprocess(tryParseJson, zod_1.z.any()).optional(),
     createBackup: zod_1.z.boolean().optional(),
     intent: zod_1.z.string().optional(),
 });
 const listWorkflowsSchema = zod_1.z.object({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
     active: zod_1.z.boolean().optional(),
-    tags: zod_1.z.array(zod_1.z.string()).optional(),
-    projectId: zod_1.z.string().optional(),
+    tags: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.string())).optional(),
+    projectId: optionalEmptyAware(zod_1.z.string()),
     excludePinnedData: zod_1.z.boolean().optional(),
 });
 const validateWorkflowSchema = zod_1.z.object({
@@ -247,11 +259,11 @@ const autofixWorkflowSchema = zod_1.z.object({
 });
 const testWorkflowSchema = zod_1.z.object({
     workflowId: zod_1.z.string(),
-    triggerType: zod_1.z.enum(['webhook', 'form', 'chat']).optional(),
-    httpMethod: zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
-    webhookPath: zod_1.z.string().optional(),
-    message: zod_1.z.string().optional(),
-    sessionId: zod_1.z.string().optional(),
+    triggerType: optionalEmptyAware(zod_1.z.enum(['webhook', 'form', 'chat'])),
+    httpMethod: optionalEmptyAware(zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
+    webhookPath: optionalEmptyAware(zod_1.z.string()),
+    message: optionalEmptyAware(zod_1.z.string()),
+    sessionId: optionalEmptyAware(zod_1.z.string()),
     data: zod_1.z.record(zod_1.z.unknown()).optional(),
     headers: zod_1.z.record(zod_1.z.string()).optional(),
     timeout: zod_1.z.number().optional(),
@@ -259,10 +271,10 @@ const testWorkflowSchema = zod_1.z.object({
 });
 const listExecutionsSchema = zod_1.z.object({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
-    workflowId: zod_1.z.string().optional(),
-    projectId: zod_1.z.string().optional(),
-    status: zod_1.z.enum(['success', 'error', 'waiting']).optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
+    workflowId: optionalEmptyAware(zod_1.z.string()),
+    projectId: optionalEmptyAware(zod_1.z.string()),
+    status: optionalEmptyAware(zod_1.z.enum(['success', 'error', 'waiting'])),
     includeData: zod_1.z.boolean().optional(),
 });
 const workflowVersionsSchema = zod_1.z.object({
@@ -2015,7 +2027,7 @@ async function handleDeployTemplate(args, templateService, repository, context) 
 async function handleTriggerWebhookWorkflow(args, context) {
     const triggerWebhookSchema = zod_1.z.object({
         webhookUrl: zod_1.z.string().url(),
-        httpMethod: zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
+        httpMethod: optionalEmptyAware(zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
         data: zod_1.z.record(zod_1.z.unknown()).optional(),
         headers: zod_1.z.record(zod_1.z.string()).optional(),
         waitForResponse: zod_1.z.boolean().optional(),
@@ -2095,34 +2107,25 @@ const createTableSchema = zod_1.z.object({
     columns: zod_1.z.array(zod_1.z.object({
         name: zod_1.z.string().min(1, 'Column name cannot be empty'),
         type: zod_1.z.enum(['string', 'number', 'boolean', 'date']).optional(),
-    })).optional(),
+    })).min(1, 'At least one column is required'),
+    projectId: optionalEmptyAware(zod_1.z.string()),
 });
 const listTablesSchema = zod_1.z.object({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
 });
 const updateTableSchema = tableIdSchema.extend({
     name: zod_1.z.string().min(1, 'New table name cannot be empty'),
 });
-function tryParseJson(val) {
-    if (typeof val !== 'string')
-        return val;
-    try {
-        return JSON.parse(val);
-    }
-    catch {
-        return val;
-    }
-}
 const coerceJsonArray = zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.record(zod_1.z.unknown())));
 const coerceJsonObject = zod_1.z.preprocess(tryParseJson, zod_1.z.record(zod_1.z.unknown()));
 const coerceJsonFilter = zod_1.z.preprocess(tryParseJson, dataTableFilterSchema);
 const getRowsSchema = tableIdSchema.extend({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
     filter: zod_1.z.union([coerceJsonFilter, zod_1.z.string()]).optional(),
-    sortBy: zod_1.z.string().optional(),
-    search: zod_1.z.string().optional(),
+    sortBy: optionalEmptyAware(zod_1.z.string()),
+    search: optionalEmptyAware(zod_1.z.string()),
 });
 const insertRowsSchema = tableIdSchema.extend({
     data: coerceJsonArray.pipe(zod_1.z.array(zod_1.z.record(zod_1.z.unknown())).min(1, 'At least one row is required')),
@@ -2308,9 +2311,12 @@ async function handleDeleteRows(args, context) {
             ...params,
         };
         const result = await client.deleteDataTableRows(tableId, queryParams);
+        const cleanedResult = params.dryRun && Array.isArray(result)
+            ? result.filter((row) => row?.dryRunState !== 'after')
+            : result;
         return {
             success: true,
-            data: result,
+            data: cleanedResult,
             message: params.dryRun ? 'Dry run: rows matched for deletion (no changes applied)' : 'Rows deleted successfully',
         };
     }
@@ -2318,10 +2324,47 @@ async function handleDeleteRows(args, context) {
         return handleCrudError(error);
     }
 }
-const listCredentialsSchema = zod_1.z.object({}).passthrough();
+const listCredentialsSchema = zod_1.z.object({
+    includeUsage: zod_1.z.boolean().optional(),
+}).passthrough();
 const getCredentialSchema = zod_1.z.object({
     id: zod_1.z.string({ required_error: 'Credential ID is required' }),
+    includeUsage: zod_1.z.boolean().optional(),
 });
+async function buildCredentialUsageMap(client) {
+    const usage = new Map();
+    const workflows = await client.listAllWorkflows();
+    for (const wf of workflows) {
+        if (!wf.id)
+            continue;
+        const entry = {
+            id: wf.id,
+            name: wf.name,
+            active: wf.active ?? false,
+        };
+        const seenForThisWorkflow = new Set();
+        for (const node of wf.nodes ?? []) {
+            if (!node.credentials)
+                continue;
+            for (const credConfig of Object.values(node.credentials)) {
+                const credId = credConfig?.id;
+                if (typeof credId !== 'string' || credId === '')
+                    continue;
+                if (seenForThisWorkflow.has(credId))
+                    continue;
+                seenForThisWorkflow.add(credId);
+                const list = usage.get(credId);
+                if (list) {
+                    list.push(entry);
+                }
+                else {
+                    usage.set(credId, [entry]);
+                }
+            }
+        }
+    }
+    return usage;
+}
 const createCredentialSchema = zod_1.z.object({
     name: zod_1.z.string({ required_error: 'Credential name is required' }),
     type: zod_1.z.string({ required_error: 'Credential type is required' }),
@@ -2342,14 +2385,29 @@ const getCredentialSchemaTypeSchema = zod_1.z.object({
 async function handleListCredentials(args, context) {
     try {
         const client = ensureApiConfigured(context);
-        listCredentialsSchema.parse(args);
+        const { includeUsage } = listCredentialsSchema.parse(args);
         const result = await client.listCredentials();
+        let credentials = result.data;
+        let usageScanError;
+        if (includeUsage) {
+            try {
+                const usageMap = await buildCredentialUsageMap(client);
+                credentials = result.data.map((cred) => {
+                    const usedIn = (cred.id ? usageMap.get(cred.id) : undefined) ?? [];
+                    return { ...cred, usedIn, usageCount: usedIn.length };
+                });
+            }
+            catch (scanError) {
+                usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+            }
+        }
         return {
             success: true,
             data: {
-                credentials: result.data,
-                count: result.data.length,
+                credentials,
+                count: credentials.length,
                 nextCursor: result.nextCursor || undefined,
+                ...(usageScanError ? { usageScanError } : {}),
             },
         };
     }
@@ -2360,7 +2418,7 @@ async function handleListCredentials(args, context) {
 async function handleGetCredential(args, context) {
     try {
         const client = ensureApiConfigured(context);
-        const { id } = getCredentialSchema.parse(args);
+        const { id, includeUsage } = getCredentialSchema.parse(args);
         let credential;
         try {
             credential = await client.getCredential(id);
@@ -2379,21 +2437,54 @@ async function handleGetCredential(args, context) {
             }
         }
         const { data: _sensitiveData, ...safeCred } = credential;
+        let enriched = safeCred;
+        let usageScanError;
+        if (includeUsage) {
+            try {
+                const usageMap = await buildCredentialUsageMap(client);
+                const usedIn = usageMap.get(id) ?? [];
+                enriched = { ...safeCred, usedIn, usageCount: usedIn.length };
+            }
+            catch (scanError) {
+                usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+            }
+        }
         return {
             success: true,
-            data: safeCred,
+            data: usageScanError ? { ...enriched, usageScanError } : enriched,
         };
     }
     catch (error) {
         return handleCrudError(error);
     }
 }
+function applyCredentialDataShims(type, data) {
+    if (!data || type !== 'oAuth2Api' || data.grantType !== 'clientCredentials') {
+        return data;
+    }
+    const shimmed = { ...data };
+    if ('useDynamicClientRegistration' in shimmed && !shimmed.useDynamicClientRegistration) {
+        delete shimmed.useDynamicClientRegistration;
+    }
+    if (!('sendAdditionalBodyProperties' in shimmed)) {
+        shimmed.sendAdditionalBodyProperties = false;
+    }
+    if (!('additionalBodyProperties' in shimmed)) {
+        shimmed.additionalBodyProperties = '';
+    }
+    const dcrActive = shimmed.useDynamicClientRegistration === true;
+    if (!dcrActive && !('serverUrl' in shimmed)) {
+        shimmed.serverUrl = '';
+    }
+    return shimmed;
+}
 async function handleCreateCredential(args, context) {
     try {
         const client = ensureApiConfigured(context);
         const { name, type, data } = createCredentialSchema.parse(args);
+        const shimmedData = applyCredentialDataShims(type, data);
         logger_1.logger.info(`Creating credential: name="${name}", type="${type}"`);
-        const credential = await client.createCredential({ name, type, data });
+        const credential = await client.createCredential({ name, type, data: shimmedData });
         const { data: _sensitiveData, ...safeCred } = credential;
         return {
             success: true,
@@ -2415,8 +2506,18 @@ async function handleUpdateCredential(args, context) {
             updatePayload.name = name;
         if (type !== undefined)
             updatePayload.type = type;
-        if (data !== undefined)
-            updatePayload.data = data;
+        if (data !== undefined) {
+            let derivedType = type;
+            if (derivedType === undefined && data?.grantType === 'clientCredentials') {
+                try {
+                    const existing = await client.getCredential(id);
+                    derivedType = existing?.type;
+                }
+                catch {
+                }
+            }
+            updatePayload.data = applyCredentialDataShims(derivedType ?? '', data);
+        }
         const credential = await client.updateCredential(id, updatePayload);
         const { data: _sensitiveData, ...safeCred } = credential;
         return {
@@ -2477,8 +2578,8 @@ async function handleAuditInstance(args, context) {
         const warnings = [];
         let builtinAudit = null;
         let builtinAuditMs = 0;
+        const auditStart = Date.now();
         try {
-            const auditStart = Date.now();
             builtinAudit = await client.generateAudit({
                 categories: input.categories,
                 daysAbandonedWorkflow: input.daysAbandonedWorkflow,
@@ -2486,10 +2587,19 @@ async function handleAuditInstance(args, context) {
             builtinAuditMs = Date.now() - auditStart;
         }
         catch (auditError) {
-            builtinAuditMs = Date.now() - totalStart;
-            const msg = auditError?.statusCode === 404
-                ? 'Built-in audit endpoint not available on this n8n version.'
-                : `Built-in audit failed: ${auditError?.message || 'unknown error'}`;
+            builtinAuditMs = Date.now() - auditStart;
+            const status = auditError?.statusCode;
+            const reason = auditError?.message || 'unknown error';
+            let msg;
+            if (status === 404) {
+                msg = 'Built-in audit endpoint not available on this n8n version.';
+            }
+            else if (status !== undefined) {
+                msg = `Built-in audit failed (HTTP ${status}): ${reason}`;
+            }
+            else {
+                msg = `Built-in audit failed (no response from n8n): ${reason}`;
+            }
             warnings.push(msg);
             logger_1.logger.warn(`Audit: ${msg}`);
         }

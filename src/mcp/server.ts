@@ -16,6 +16,7 @@ import { chatwootTools } from './tools-chatwoot';
 import { makeToolsN8nFriendly } from './tools-n8n-friendly';
 import { getWorkflowExampleString } from './workflow-examples';
 import { logger } from '../utils/logger';
+import { summarizeToolCallArgs } from '../utils/redaction';
 import { NodeRepository } from '../database/node-repository';
 import { DatabaseAdapter, createDatabaseAdapter } from '../database/database-adapter';
 import { getSharedDatabase, releaseSharedDatabase, SharedDatabaseState } from '../database/shared-database';
@@ -711,16 +712,12 @@ export class N8NDocumentationMCPServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
       
-      // Enhanced logging for debugging tool calls
-      logger.info('Tool call received - DETAILED DEBUG', {
+      // SECURITY (GHSA-wg4g-395p-mqv3): log metadata only, not raw arg values.
+      logger.info('Tool call received', {
         toolName: name,
-        arguments: JSON.stringify(args, null, 2),
-        argumentsType: typeof args,
-        argumentsKeys: args ? Object.keys(args) : [],
-        hasNodeType: args && 'nodeType' in args,
-        hasConfig: args && 'config' in args,
-        configType: args && args.config ? typeof args.config : 'N/A',
-        rawRequest: JSON.stringify(request.params)
+        ...summarizeToolCallArgs(args),
+        hasNodeType: !!(args && typeof args === 'object' && 'nodeType' in args),
+        hasConfig: !!(args && typeof args === 'object' && 'config' in args),
       });
 
       // Check if tool is disabled via DISABLED_TOOLS environment variable
@@ -763,11 +760,13 @@ export class N8NDocumentationMCPServer {
           if (typeof possibleNestedData === 'string' && possibleNestedData.trim().startsWith('{')) {
             const parsed = JSON.parse(possibleNestedData);
             if (parsed && typeof parsed === 'object') {
+              // SECURITY (GHSA-wg4g-395p-mqv3): log key shape only, not values.
               logger.warn('Detected n8n nested output bug, attempting to extract actual arguments', {
-                originalArgs: args,
-                extractedArgs: parsed
+                toolName: name,
+                originalArgsKeys: Object.keys(args),
+                extractedArgsKeys: Object.keys(parsed),
               });
-              
+
               // Validate the extracted arguments match expected tool schema
               if (this.validateExtractedArgs(name, parsed)) {
                 // Use the extracted data as args
@@ -775,7 +774,7 @@ export class N8NDocumentationMCPServer {
               } else {
                 logger.warn('Extracted arguments failed validation, using original args', {
                   toolName: name,
-                  extractedArgs: parsed
+                  extractedArgsKeys: Object.keys(parsed),
                 });
               }
             }
@@ -801,7 +800,8 @@ export class N8NDocumentationMCPServer {
       }
 
       try {
-        logger.debug(`Executing tool: ${name}`, { args: processedArgs });
+        // SECURITY (GHSA-wg4g-395p-mqv3): log metadata only, not raw arg values.
+        logger.debug(`Executing tool: ${name}`, summarizeToolCallArgs(processedArgs));
         const startTime = Date.now();
         const result = await this.executeTool(name, processedArgs);
         const duration = Date.now() - startTime;
@@ -1177,8 +1177,8 @@ export class N8NDocumentationMCPServer {
       if (!(requiredField in args)) {
         logger.debug(`Extracted args missing required field: ${requiredField}`, {
           toolName,
-          extractedArgs: args,
-          required
+          extractedArgsKeys: Object.keys(args),
+          required,
         });
         return false;
       }
@@ -1197,11 +1197,11 @@ export class N8NDocumentationMCPServer {
             continue;
           }
           
+          // SECURITY (GHSA-wg4g-395p-mqv3): log type mismatch shape only, not the value.
           logger.debug(`Extracted args field type mismatch: ${fieldName}`, {
             toolName,
             expectedType,
             actualType,
-            fieldValue
           });
           return false;
         }
@@ -1279,7 +1279,13 @@ export class N8NDocumentationMCPServer {
               coerced[key] = parsed;
               coercedAny = true;
             }
-          } catch { /* keep original */ }
+          } catch (e) {
+            logger.warn(`Failed to parse string→${expectedType} for param "${key}" in tool "${toolName}"`, {
+              error: e instanceof Error ? e.message : String(e),
+              valuePreview: trimmed.substring(0, 200),
+              valueLength: trimmed.length,
+            });
+          }
           continue;
         }
 
@@ -1290,7 +1296,13 @@ export class N8NDocumentationMCPServer {
               coerced[key] = parsed;
               coercedAny = true;
             }
-          } catch { /* keep original */ }
+          } catch (e) {
+            logger.warn(`Failed to parse string→${expectedType} for param "${key}" in tool "${toolName}"`, {
+              error: e instanceof Error ? e.message : String(e),
+              valuePreview: trimmed.substring(0, 200),
+              valueLength: trimmed.length,
+            });
+          }
           continue;
         }
 
@@ -1319,9 +1331,10 @@ export class N8NDocumentationMCPServer {
     }
 
     if (coercedAny) {
+      // SECURITY (GHSA-wg4g-395p-mqv3): log key-level types only, never values.
       logger.warn(`Coerced mistyped params for tool "${toolName}"`, {
         original: Object.fromEntries(
-          Object.entries(args).map(([k, v]) => [k, `${typeof v}: ${typeof v === 'string' ? v.substring(0, 80) : v}`])
+          Object.entries(args).map(([k, v]) => [k, typeof v])
         ),
       });
     }
@@ -1341,12 +1354,8 @@ export class N8NDocumentationMCPServer {
       throw new Error(`Tool '${name}' is disabled via DISABLED_TOOLS environment variable`);
     }
 
-    // Log the tool call for debugging n8n issues
-    logger.info(`Tool execution: ${name}`, {
-      args: typeof args === 'object' ? JSON.stringify(args) : args,
-      argsType: typeof args,
-      argsKeys: typeof args === 'object' ? Object.keys(args) : 'not-object'
-    });
+    // SECURITY (GHSA-wg4g-395p-mqv3): log metadata only, not raw arg values.
+    logger.info(`Tool execution: ${name}`, summarizeToolCallArgs(args));
 
     // Validate that args is actually an object
     if (typeof args !== 'object' || args === null) {
@@ -3151,9 +3160,12 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
 
     const versions = this.repository!.getNodeVersions(nodeType);
     const latest = this.repository!.getLatestNodeVersion(nodeType);
+    // Fall back to the node row's current version so callers don't see
+    // "unknown" when version history rows haven't been populated.
+    const nodeRow = latest ? null : this.repository!.getNode(nodeType);
 
     const summary: VersionSummary = {
-      currentVersion: latest?.version || 'unknown',
+      currentVersion: latest?.version ?? nodeRow?.version ?? 'unknown',
       totalVersions: versions.length,
       hasVersionHistory: versions.length > 0
     };
@@ -3165,13 +3177,35 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
   }
 
   /**
+   * Shape returned by version modes when no metadata rows have been populated.
+   * Callers MUST treat this as "no data" — not as "no breaking changes".
+   */
+  private versionMetadataUnavailable(nodeType: string, extra: Record<string, unknown> = {}): any {
+    const node = this.repository!.getNode(nodeType);
+    return {
+      nodeType,
+      available: false,
+      reason:
+        'Version metadata not populated for this node. Callers must not infer upgrade safety from this response.',
+      currentVersion: node?.version ?? null,
+      isVersioned: node?.isVersioned ?? false,
+      ...extra
+    };
+  }
+
+  /**
    * Get complete version history for a node
    */
   private getVersionHistory(nodeType: string): any {
+    if (!this.repository!.hasVersionMetadata(nodeType)) {
+      return this.versionMetadataUnavailable(nodeType, { totalVersions: 0, versions: [] });
+    }
+
     const versions = this.repository!.getNodeVersions(nodeType);
 
     return {
       nodeType,
+      available: true,
       totalVersions: versions.length,
       versions: versions.map(v => ({
         version: v.version,
@@ -3182,11 +3216,7 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
         breakingChangesCount: (v.breakingChanges || []).length,
         deprecatedProperties: v.deprecatedProperties || [],
         addedProperties: v.addedProperties || []
-      })),
-      available: versions.length > 0,
-      message: versions.length === 0 ?
-        'No version history available. Version tracking may not be enabled for this node.' :
-        undefined
+      }))
     };
   }
 
@@ -3198,6 +3228,15 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
     fromVersion: string,
     toVersion?: string
   ): any {
+    if (!this.repository!.hasVersionMetadata(nodeType)) {
+      return this.versionMetadataUnavailable(nodeType, {
+        fromVersion,
+        toVersion: toVersion ?? 'latest',
+        totalChanges: 0,
+        changes: []
+      });
+    }
+
     const latest = this.repository!.getLatestNodeVersion(nodeType);
     const targetVersion = toVersion || latest?.version;
 
@@ -3213,6 +3252,7 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
 
     return {
       nodeType,
+      available: true,
       fromVersion,
       toVersion: targetVersion,
       totalChanges: changes.length,
@@ -3238,6 +3278,17 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
     fromVersion: string,
     toVersion?: string
   ): any {
+    if (!this.repository!.hasVersionMetadata(nodeType)) {
+      // Critical: do NOT return upgradeSafe: true when we have no data.
+      // Agents rely on this field to decide whether to proceed with an upgrade.
+      return this.versionMetadataUnavailable(nodeType, {
+        fromVersion,
+        toVersion: toVersion ?? 'latest',
+        totalBreakingChanges: 0,
+        changes: []
+      });
+    }
+
     const breakingChanges = this.repository!.getBreakingChanges(
       nodeType,
       fromVersion,
@@ -3246,6 +3297,7 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
 
     return {
       nodeType,
+      available: true,
       fromVersion,
       toVersion: toVersion || 'latest',
       totalBreakingChanges: breakingChanges.length,
@@ -3271,6 +3323,16 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
     fromVersion: string,
     toVersion: string
   ): any {
+    if (!this.repository!.hasVersionMetadata(nodeType)) {
+      return this.versionMetadataUnavailable(nodeType, {
+        fromVersion,
+        toVersion,
+        autoMigratableChanges: 0,
+        totalChanges: 0,
+        migrations: []
+      });
+    }
+
     const migrations = this.repository!.getAutoMigratableChanges(
       nodeType,
       fromVersion,
@@ -3285,6 +3347,7 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
 
     return {
       nodeType,
+      available: true,
       fromVersion,
       toVersion,
       autoMigratableChanges: migrations.length,
@@ -4103,9 +4166,30 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
   }, limit: number = 20, offset: number = 0): Promise<any> {
     await this.ensureInitialized();
     if (!this.templateService) throw new Error('Template service not initialized');
-    
+
+    // If metadata hasn't been enriched for ANY template, every by_metadata
+    // query will return empty. Surface that explicitly instead of silently
+    // returning an empty items array — otherwise callers can't tell "no
+    // matches" apart from "feature not yet populated".
+    const metadataAvailable = await this.templateService.hasMetadataCoverage();
+    if (!metadataAvailable) {
+      return {
+        available: false,
+        reason:
+          'Template metadata has not been enriched yet. by_metadata search requires ' +
+          'running the metadata enrichment job (see scripts/fetch-templates). ' +
+          'Use searchMode "keyword", "by_nodes", or "patterns" in the meantime.',
+        filters,
+        items: [],
+        total: 0,
+        limit,
+        offset,
+        hasMore: false
+      };
+    }
+
     const result = await this.templateService.searchTemplatesByMetadata(filters, limit, offset);
-    
+
     // Build filter summary for feedback
     const filterSummary: string[] = [];
     if (filters.category) filterSummary.push(`category: ${filters.category}`);
@@ -4114,14 +4198,15 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
     if (filters.minSetupMinutes) filterSummary.push(`min setup: ${filters.minSetupMinutes} min`);
     if (filters.requiredService) filterSummary.push(`service: ${filters.requiredService}`);
     if (filters.targetAudience) filterSummary.push(`audience: ${filters.targetAudience}`);
-    
+
     if (result.items.length === 0 && offset === 0) {
       // Get available categories and audiences for suggestions
       const availableCategories = await this.templateService.getAvailableCategories();
       const availableAudiences = await this.templateService.getAvailableTargetAudiences();
-      
+
       return {
         ...result,
+        available: true,
         message: `No templates found with filters: ${filterSummary.join(', ')}`,
         availableCategories: availableCategories.slice(0, 10),
         availableAudiences: availableAudiences.slice(0, 5),
@@ -4131,12 +4216,13 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
     
     return {
       ...result,
+      available: true,
       filters,
       filterSummary: filterSummary.join(', '),
       tip: `Found ${result.total} templates matching filters. Showing ${result.items.length}. Each includes AI-generated metadata.`
     };
   }
-  
+
   private getTaskDescription(task: string): string {
     const descriptions: Record<string, string> = {
       'ai_automation': 'AI-powered workflows using OpenAI, LangChain, and other AI tools',
