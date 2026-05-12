@@ -80,12 +80,8 @@ jobs:
         continue-on-error: true
 
       # Run integration tests separately (with MSW setup)
-      # NOTE (fork): continue-on-error because upstream's integration tests
-      # require N8N_API_KEY + webhook URL secrets that aren't configured in
-      # this fork. Unit tests above still gate the build.
       - name: Run integration tests
         run: npm run test:integration -- --reporter=default --reporter=junit
-        continue-on-error: true
         env:
           CI: true
           N8N_API_URL: ${{ secrets.N8N_API_URL }}

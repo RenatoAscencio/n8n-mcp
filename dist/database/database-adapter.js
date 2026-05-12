@@ -138,27 +138,14 @@ async function createSQLJSAdapter(dbPath) {
         }
     });
     let db;
-    if (dbPath === ':memory:') {
-        db = new SQL.Database();
-        logger_1.logger.info('Created new in-memory database');
+    try {
+        const data = await fs_1.promises.readFile(dbPath);
+        db = new SQL.Database(new Uint8Array(data));
+        logger_1.logger.info(`Loaded existing database from ${dbPath}`);
     }
-    else {
-        try {
-            const data = await fs_1.promises.readFile(dbPath);
-            db = new SQL.Database(new Uint8Array(data));
-            logger_1.logger.info(`Loaded existing database from ${dbPath}`);
-        }
-        catch (error) {
-            db = new SQL.Database();
-            logger_1.logger.info(`Created new database at ${dbPath}`);
-            try {
-                const emptyData = db.export();
-                fsSync.writeFileSync(dbPath, emptyData);
-            }
-            catch (writeError) {
-                logger_1.logger.warn(`Could not write initial database file at ${dbPath}`, writeError);
-            }
-        }
+    catch (error) {
+        db = new SQL.Database();
+        logger_1.logger.info(`Created new database at ${dbPath}`);
     }
     return new SQLJSAdapter(db, dbPath);
 }
@@ -272,9 +259,6 @@ class SQLJSAdapter {
         }, this.saveIntervalMs);
     }
     saveToFile() {
-        if (this.dbPath === ':memory:') {
-            return;
-        }
         try {
             const data = this.db.export();
             fsSync.writeFileSync(this.dbPath, data);
@@ -358,6 +342,9 @@ class SQLJSStatement {
             this.stmt.reset();
             throw error;
         }
+        finally {
+            this.freeStatement();
+        }
     }
     get(...params) {
         try {
@@ -379,6 +366,9 @@ class SQLJSStatement {
             this.stmt.reset();
             throw error;
         }
+        finally {
+            this.freeStatement();
+        }
     }
     all(...params) {
         try {
@@ -398,6 +388,9 @@ class SQLJSStatement {
         catch (error) {
             this.stmt.reset();
             throw error;
+        }
+        finally {
+            this.freeStatement();
         }
     }
     iterate(...params) {

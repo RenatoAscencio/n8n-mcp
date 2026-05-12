@@ -156,5 +156,5 @@ docker-compose.tvplus.yml
 MCP_SMOKE.md
 N8N_WORKFLOW_SMOKE.md
 WORKFLOW_BUILDER_RULES.md
-workflows/
+/workflows/
 docs/RUNBOOK-MCP-HTTP.md

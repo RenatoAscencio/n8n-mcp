@@ -485,9 +485,10 @@ class SQLJSStatement implements PreparedStatement {
     } catch (error) {
       this.stmt.reset();
       throw error;
+    } finally {
+      // Free statement memory after write operation completes
+      this.freeStatement();
     }
-    // Note: statement is NOT freed here to allow reuse (prepare-once, run-many pattern).
-    // Memory is managed by the SQLJSAdapter.close() lifecycle.
   }
 
   get(...params: any[]): any {
@@ -510,9 +511,10 @@ class SQLJSStatement implements PreparedStatement {
     } catch (error) {
       this.stmt.reset();
       throw error;
+    } finally {
+      // Free statement memory after read operation completes
+      this.freeStatement();
     }
-    // Note: statement is NOT freed here to allow reuse (prepare-once, run-many pattern).
-    // Memory is managed by the SQLJSAdapter.close() lifecycle.
   }
 
   all(...params: any[]): any[] {
@@ -534,9 +536,10 @@ class SQLJSStatement implements PreparedStatement {
     } catch (error) {
       this.stmt.reset();
       throw error;
+    } finally {
+      // Free statement memory after read operation completes
+      this.freeStatement();
     }
-    // Note: statement is NOT freed here to allow reuse (prepare-once, run-many pattern).
-    // Memory is managed by the SQLJSAdapter.close() lifecycle.
   }
   
   iterate(...params: any[]): IterableIterator<any> {
