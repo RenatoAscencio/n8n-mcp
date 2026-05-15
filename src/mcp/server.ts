@@ -13,6 +13,12 @@ import { n8nDocumentationToolsFinal } from './tools';
 import { UIAppRegistry } from './ui';
 import { n8nManagementTools } from './tools-n8n-manager';
 import { chatwootTools } from './tools-chatwoot';
+import { n8nRestTools } from './tools-n8n-rest';
+import {
+  handleN8nLogin,
+  handleN8nCreateFolder,
+  handleN8nMoveWorkflow,
+} from './handlers-n8n-rest';
 import { makeToolsN8nFriendly } from './tools-n8n-friendly';
 import { getWorkflowExampleString } from './workflow-examples';
 import { logger } from '../utils/logger';
@@ -647,6 +653,14 @@ export class N8NDocumentationMCPServer {
       );
       tools.push(...enabledChatwootTools);
 
+      // Include n8n REST tools (internal /rest/* API). Disabled in multi-tenant.
+      if (process.env.ENABLE_MULTI_TENANT !== 'true') {
+        const enabledRestTools = n8nRestTools.filter(
+          tool => !disabledTools.has(tool.name)
+        );
+        tools.push(...enabledRestTools);
+      }
+
       // Check if n8n API tools should be available
       // 1. Environment variables (backward compatibility)
       // 2. Instance context (multi-tenant support)
@@ -1163,7 +1177,7 @@ export class N8NDocumentationMCPServer {
     }
 
     // Get all available tools
-    const allTools = [...n8nDocumentationToolsFinal, ...n8nManagementTools];
+    const allTools = [...n8nDocumentationToolsFinal, ...n8nManagementTools, ...chatwootTools, ...n8nRestTools];
     const tool = allTools.find(t => t.name === toolName);
     if (!tool || !tool.inputSchema) {
       return true; // If no schema, assume valid
@@ -1244,7 +1258,7 @@ export class N8NDocumentationMCPServer {
   ): Record<string, any> | undefined {
     if (!args || typeof args !== 'object') return args;
 
-    const allTools = [...n8nDocumentationToolsFinal, ...n8nManagementTools];
+    const allTools = [...n8nDocumentationToolsFinal, ...n8nManagementTools, ...chatwootTools, ...n8nRestTools];
     const tool = allTools.find(t => t.name === toolName);
     if (!tool?.inputSchema?.properties) return args;
 
@@ -1580,6 +1594,14 @@ export class N8NDocumentationMCPServer {
       // Chatwoot Integration Tools (fork-specific)
       case 'chatwoot_doctor':
         return chatwootHandlers.handleChatwootDoctor(args, this.instanceContext);
+
+      // n8n internal REST API tools (fork-specific, cookie auth)
+      case 'n8n_login':
+        return handleN8nLogin(args);
+      case 'n8n_create_folder':
+        return handleN8nCreateFolder(args);
+      case 'n8n_move_workflow':
+        return handleN8nMoveWorkflow(args);
 
       case 'n8n_manage_datatable': {
         this.validateToolParams(name, args, ['action']);
