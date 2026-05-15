@@ -78,6 +78,36 @@ describe('n8n REST handlers', () => {
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('HTTP 401');
     });
+
+    it('accepts mfaCode and forwards it to the rest client', async () => {
+      (restClient.n8nRestLogin as any).mockResolvedValue({
+        baseUrl: 'https://n8n.example.com',
+        cookiePath: '/tmp/cookie.json',
+      });
+
+      const result: any = await handleN8nLogin({
+        baseUrl: 'https://n8n.example.com',
+        email: 'user@example.com',
+        password: 'secret',
+        mfaCode: '123456',
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(restClient.n8nRestLogin).toHaveBeenCalledWith(
+        expect.objectContaining({ mfaCode: '123456' })
+      );
+    });
+
+    it('rejects malformed mfaCode (not 6 digits)', async () => {
+      const result: any = await handleN8nLogin({
+        baseUrl: 'https://n8n.example.com',
+        email: 'user@example.com',
+        password: 'secret',
+        mfaCode: 'abcdef',
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/Invalid input/);
+    });
   });
 
   describe('handleN8nCreateFolder', () => {

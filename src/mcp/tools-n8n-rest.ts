@@ -13,7 +13,7 @@ import { ToolDefinition } from '../types';
 export const n8nRestTools: ToolDefinition[] = [
   {
     name: 'n8n_login',
-    description: 'Authenticate against the n8n internal REST API using email + password. Saves the resulting session cookie to disk (~/.n8n-mcp/cookies/) for subsequent n8n_create_folder and n8n_move_workflow calls. Refused in multi-tenant mode.',
+    description: 'Authenticate against the n8n internal REST API using email + password (plus mfaCode if the account has 2FA enabled). Saves the resulting session cookie to disk (~/.n8n-mcp/cookies/) for subsequent n8n_create_folder and n8n_move_workflow calls. Refused in multi-tenant mode.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -23,6 +23,10 @@ export const n8nRestTools: ToolDefinition[] = [
         },
         email: { type: 'string', description: 'Account email or LDAP login ID' },
         password: { type: 'string', description: 'Account password' },
+        mfaCode: {
+          type: 'string',
+          description: 'Optional 6-digit TOTP code from your authenticator app. REQUIRED if the account has 2FA enabled (otherwise n8n returns HTTP 401 code 998 — MFA Error).',
+        },
       },
       required: ['baseUrl', 'email', 'password'],
     },

@@ -31,6 +31,7 @@ const loginSchema = z.object({
   baseUrl: z.string().url(),
   email: z.string().min(1),
   password: z.string().min(1),
+  mfaCode: z.string().regex(/^\d{6}$/, 'mfaCode must be a 6-digit TOTP').optional(),
 });
 
 const folderSchema = z.object({

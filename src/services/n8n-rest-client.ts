@@ -19,6 +19,7 @@ export interface N8nRestLoginInput {
   baseUrl: string;
   email: string;
   password: string;
+  mfaCode?: string;
 }
 
 export interface N8nRestFolderInput {
@@ -74,13 +75,24 @@ export async function n8nRestLogin(input: N8nRestLoginInput): Promise<{ baseUrl:
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const client = buildClient(baseUrl);
 
-  logger.info(`Logging in to n8n REST API at ${baseUrl}`);
-  const res = await client.post('/rest/login', {
+  logger.info(`Logging in to n8n REST API at ${baseUrl}${input.mfaCode ? ' (with MFA)' : ''}`);
+  const body: Record<string, string> = {
     emailOrLdapLoginId: input.email,
     password: input.password,
-  });
+  };
+  if (input.mfaCode) body.mfaCode = input.mfaCode;
+
+  const res = await client.post('/rest/login', body);
 
   if (res.status !== 200) {
+    // n8n returns HTTP 401 + {code:998, message:"MFA Error"} when 2FA is enabled
+    // but no mfaCode was supplied (or the code was wrong).
+    const data = res.data as { code?: number; message?: string };
+    if (res.status === 401 && data?.code === 998) {
+      throw new Error(
+        'Login failed: this n8n account has MFA enabled. Pass `mfaCode` (6-digit TOTP from your authenticator app) when calling n8n_login.'
+      );
+    }
     throw new Error(`Login failed: HTTP ${res.status} — ${JSON.stringify(res.data)}`);
   }
 
